@@ -8,12 +8,18 @@
 export const STORAGE_KEYS = {
   GAS_URL: 'GAS_WEB_APP_URL',
   LANG: 'NOTE_WORD_LANG',
+  UI_LANG: 'NOTE_WORD_UI_LANG',
 };
 
 export const DEFAULT_LANG = 'English';
+export const DEFAULT_UI_LANG = 'vi';
 
 export const SUPPORTED_LANGUAGES = [
-  { value: 'English', label: 'English (Mặc định - Phase 1)' },
+  {
+    value: 'English',
+    labelVi: 'English (Mặc định - Phase 1)',
+    labelEn: 'English (Default - Phase 1)',
+  },
 ];
 
 export function getApiUrl() {
@@ -48,28 +54,66 @@ export function setCurrentLang(lang) {
   return cleaned;
 }
 
+export function getUiLang() {
+  try {
+    const val = (localStorage.getItem(STORAGE_KEYS.UI_LANG) || DEFAULT_UI_LANG).trim();
+    return val === 'en' ? 'en' : 'vi';
+  } catch {
+    return DEFAULT_UI_LANG;
+  }
+}
+
+export function setUiLang(lang) {
+  const normalized = lang === 'en' ? 'en' : 'vi';
+  try {
+    localStorage.setItem(STORAGE_KEYS.UI_LANG, normalized);
+  } catch {
+    // Ignore storage errors
+  }
+  return normalized;
+}
+
 function requireApiUrl(overrideUrl) {
-  const url = (overrideUrl !== undefined ? String(overrideUrl).trim() : getApiUrl());
+  const url = overrideUrl !== undefined ? String(overrideUrl).trim() : getApiUrl();
   if (!url) {
-    throw new Error('Chưa cấu hình Google Apps Script Web App URL. Vui lòng nhập URL trong trang Cài đặt.');
+    const isEn = getUiLang() === 'en';
+    throw new Error(
+      isEn
+        ? 'Google Apps Script Web App URL is not configured. Please add it in Settings.'
+        : 'Chưa cấu hình Google Apps Script Web App URL. Vui lòng nhập URL trong trang Cài đặt.'
+    );
   }
   return url;
 }
 
 async function parseGasResponse(response) {
+  const isEn = getUiLang() === 'en';
   if (!response.ok) {
-    throw new Error(`Lỗi kết nối máy chủ (HTTP ${response.status}).`);
+    throw new Error(
+      isEn
+        ? `Server connection error (HTTP ${response.status}).`
+        : `Lỗi kết nối máy chủ (HTTP ${response.status}).`
+    );
   }
 
   let json;
   try {
     json = await response.json();
   } catch {
-    throw new Error('Phản hồi từ Google Apps Script không phải JSON hợp lệ. Hãy kiểm tra lại URL Web App và quyền truy cập "Anyone".');
+    throw new Error(
+      isEn
+        ? 'Invalid JSON response from Google Apps Script. Check your Web App URL and "Anyone" access setting.'
+        : 'Phản hồi từ Google Apps Script không phải JSON hợp lệ. Hãy kiểm tra lại URL Web App và quyền truy cập "Anyone".'
+    );
   }
 
   if (json && json.success === false) {
-    throw new Error(json.error || 'Yêu cầu tới Google Apps Script thất bại.');
+    throw new Error(
+      json.error ||
+        (isEn
+          ? 'Google Apps Script request failed.'
+          : 'Yêu cầu tới Google Apps Script thất bại.')
+    );
   }
 
   return json;
@@ -111,7 +155,13 @@ export async function getWords({ lang = getCurrentLang(), dueOnly = false, url }
 /**
  * Add a new word (auto EN->VI translation if meaning is empty).
  */
-export async function addWord({ word, meaning = '', context = '', sourceUrl = '', lang = getCurrentLang() }) {
+export async function addWord({
+  word,
+  meaning = '',
+  context = '',
+  sourceUrl = '',
+  lang = getCurrentLang(),
+}) {
   const json = await postGas({
     action: 'ADD_WORD',
     lang,
@@ -153,7 +203,14 @@ export async function updateReview({
 /**
  * Edit an existing word's text, meaning, context, or sourceUrl.
  */
-export async function editWord({ id, word, meaning, context, sourceUrl, lang = getCurrentLang() }) {
+export async function editWord({
+  id,
+  word,
+  meaning,
+  context,
+  sourceUrl,
+  lang = getCurrentLang(),
+}) {
   const json = await postGas({
     action: 'EDIT_WORD',
     lang,

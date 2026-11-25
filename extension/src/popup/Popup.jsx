@@ -1,14 +1,123 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeft,
+  BookOpen,
   CheckCircle2,
   ExternalLink,
+  Eye,
+  EyeOff,
   Globe,
+  Loader2,
+  RefreshCw,
   Save,
+  Settings,
+  Sparkles,
 } from 'lucide-react';
 
 const DEFAULT_WEB_APP_URL = 'http://localhost:5173';
-const DEFAULT_LANG = 'English';
+const DEFAULT_SHEET_LANG = 'English';
+
+const I18N = {
+  vi: {
+    subtitle: 'Lưu & ôn tập từ vựng thông minh',
+    wordsHeading: 'Từ cần học',
+    dueCountAria: (n) => `${n} từ đang cần học`,
+    showMeaning: 'Hiện nghĩa',
+    hideMeaning: 'Ẩn nghĩa',
+    refreshAria: 'Làm mới danh sách từ cần học',
+    openSettingsAria: 'Mở cài đặt liên kết',
+    backToWords: 'Quay lại từ cần học',
+    langGroupAria: 'Chọn ngôn ngữ giao diện',
+    unconfiguredTitle: 'Chưa kết nối Google Sheets',
+    unconfiguredDesc:
+      'Hãy điền đường dẫn Web App trong phần Cài đặt để đồng bộ và xem các từ cần học hôm nay.',
+    goToSettings: 'Mở Cài đặt liên kết',
+    loadingWords: 'Đang tải danh sách từ cần học…',
+    retry: 'Thử lại',
+    allCaughtUpTitle: 'Tuyệt vời! Đã học hết từ hôm nay',
+    allCaughtUpDesc:
+      'Hiện không còn từ nào đến hạn ôn tập. Hãy bôi đen từ mới khi đọc web để lưu thêm.',
+    newBadge: 'Mới',
+    repBadge: (r) => `Lần ${r}`,
+    tapToReveal: 'Chạm để xem nghĩa',
+    noMeaning: 'Chưa có nghĩa',
+    openWebApp: 'Mở Web App ôn tập',
+    openWebAppWithCount: (n) => `Ôn tập ngay (${n} từ)`,
+    settingsTitle: 'Cài đặt kết nối',
+    statusReady: 'Đã kết nối',
+    statusMissing: 'Chưa cấu hình',
+    gasLabel: 'Link Google Apps Script (API)',
+    gasHint: 'URL Web App đã deploy từ Google Apps Script',
+    gasError: 'Vui lòng nhập URL hợp lệ bắt đầu bằng https://',
+    gasRequired: 'Vui lòng nhập đường dẫn Google Apps Script.',
+    webUrlLabel: 'Link trang Web App ôn tập',
+    webUrlHintPrefix: 'Mặc định:',
+    uiLangLabel: 'Ngôn ngữ hiển thị',
+    saveBtn: 'Lưu cài đặt',
+    savedSuccess: 'Đã lưu cài đặt thành công!',
+    loadSettingsErr: (m) => `Không thể đọc cài đặt: ${m}`,
+    saveSettingsErr: (m) => `Lỗi lưu cài đặt: ${m}`,
+    fetchErr: (m) => `Không thể tải từ cần học: ${m}`,
+    fetch404Hint:
+      'HTTP 404 — Kiểm tra lại Link Google Apps Script trong Cài đặt (phải có dạng https://script.google.com/macros/s/.../exec và bản deploy vẫn đang hoạt động).',
+  },
+  en: {
+    subtitle: 'Smart vocabulary capture & SRS',
+    wordsHeading: 'Words to Learn',
+    dueCountAria: (n) => `${n} words due for review`,
+    showMeaning: 'Show meaning',
+    hideMeaning: 'Hide meaning',
+    refreshAria: 'Refresh due words list',
+    openSettingsAria: 'Open link settings',
+    backToWords: 'Back to words',
+    langGroupAria: 'Select interface language',
+    unconfiguredTitle: 'Google Sheets Not Connected',
+    unconfiguredDesc:
+      'Add your Web App link in Settings to sync and view words due for review today.',
+    goToSettings: 'Open Link Settings',
+    loadingWords: 'Loading words to learn…',
+    retry: 'Retry',
+    allCaughtUpTitle: 'All caught up for today!',
+    allCaughtUpDesc:
+      'No words are currently due for review. Highlight new words while browsing to save them.',
+    newBadge: 'New',
+    repBadge: (r) => `Rep ${r}`,
+    tapToReveal: 'Tap to reveal meaning',
+    noMeaning: 'No meaning yet',
+    openWebApp: 'Open Review Web App',
+    openWebAppWithCount: (n) => `Start Review (${n} due)`,
+    settingsTitle: 'Connection Settings',
+    statusReady: 'Connected',
+    statusMissing: 'Not set',
+    gasLabel: 'Google Apps Script Link (API)',
+    gasHint: 'Deployed Web App URL from Google Apps Script',
+    gasError: 'Please enter a valid URL starting with https://',
+    gasRequired: 'Please enter your Google Apps Script URL.',
+    webUrlLabel: 'Review Web App Link',
+    webUrlHintPrefix: 'Default:',
+    uiLangLabel: 'Display Language',
+    saveBtn: 'Save Settings',
+    savedSuccess: 'Settings saved successfully!',
+    loadSettingsErr: (m) => `Could not load settings: ${m}`,
+    saveSettingsErr: (m) => `Failed to save settings: ${m}`,
+    fetchErr: (m) => `Could not load due words: ${m}`,
+    fetch404Hint:
+      'HTTP 404 — Check your Google Apps Script URL in Settings (must look like https://script.google.com/macros/s/.../exec and be an active deployment).',
+  },
+};
+
+function normalizeGasUrl(rawUrl) {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    return parsed.toString();
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
 
 async function loadSyncSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
@@ -16,12 +125,14 @@ async function loadSyncSettings() {
       'GAS_WEB_APP_URL',
       'WEB_APP_URL',
       'NOTE_WORD_LANG',
+      'UI_LANG',
     ]);
   }
   return {
     GAS_WEB_APP_URL: localStorage.getItem('GAS_WEB_APP_URL') || '',
     WEB_APP_URL: localStorage.getItem('WEB_APP_URL') || '',
-    NOTE_WORD_LANG: DEFAULT_LANG,
+    NOTE_WORD_LANG: DEFAULT_SHEET_LANG,
+    UI_LANG: localStorage.getItem('UI_LANG') || 'vi',
   };
 }
 
@@ -29,51 +140,195 @@ async function saveSyncSettings(values) {
   if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     await chrome.storage.sync.set(values);
   } else {
-    localStorage.setItem('GAS_WEB_APP_URL', values.GAS_WEB_APP_URL);
-    localStorage.setItem('WEB_APP_URL', values.WEB_APP_URL);
-    localStorage.setItem('NOTE_WORD_LANG', values.NOTE_WORD_LANG);
+    if (values.GAS_WEB_APP_URL !== undefined) {
+      localStorage.setItem('GAS_WEB_APP_URL', values.GAS_WEB_APP_URL);
+    }
+    if (values.WEB_APP_URL !== undefined) {
+      localStorage.setItem('WEB_APP_URL', values.WEB_APP_URL);
+    }
+    if (values.NOTE_WORD_LANG !== undefined) {
+      localStorage.setItem('NOTE_WORD_LANG', values.NOTE_WORD_LANG);
+    }
+    if (values.UI_LANG !== undefined) {
+      localStorage.setItem('UI_LANG', values.UI_LANG);
+    }
+  }
+}
+
+async function loadCachedDueWords() {
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    const data = await chrome.storage.local.get(['CACHED_DUE_WORDS']);
+    return Array.isArray(data.CACHED_DUE_WORDS) ? data.CACHED_DUE_WORDS : null;
+  }
+  return null;
+}
+
+async function syncExtensionBadge(count, words) {
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    await chrome.storage.local.set({
+      CACHED_DUE_WORDS: words,
+      CACHED_DUE_UPDATED_AT: Date.now(),
+    });
+  }
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'SYNC_BADGE_COUNT',
+        count,
+      });
+    } catch {
+      // Ignore if background SW is unavailable in dev mode
+    }
   }
 }
 
 export default function Popup() {
+  const [view, setView] = useState('words'); // 'words' | 'settings'
+  const [uiLang, setUiLang] = useState('vi');
   const [gasUrl, setGasUrl] = useState('');
   const [webAppUrl, setWebAppUrl] = useState('');
-  const [lang] = useState(DEFAULT_LANG);
+  const [sheetLang, setSheetLang] = useState(DEFAULT_SHEET_LANG);
+
+  const [dueWords, setDueWords] = useState([]);
+  const [loadingWords, setLoadingWords] = useState(false);
+  const [wordsError, setWordsError] = useState('');
+  const [showMeanings, setShowMeanings] = useState(true);
+  const [revealedIds, setRevealedIds] = useState(() => new Set());
+
   const [gasInvalid, setGasInvalid] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [loaded, setLoaded] = useState(false);
 
+  const t = I18N[uiLang] || I18N.vi;
+
+  useEffect(() => {
+    document.documentElement.lang = uiLang;
+  }, [uiLang]);
+
+  const fetchDueWords = useCallback(
+    async (targetGasUrl, targetSheetLang = DEFAULT_SHEET_LANG, langKey = uiLang) => {
+      const cleanUrl = normalizeGasUrl(targetGasUrl);
+      if (!cleanUrl) {
+        setDueWords([]);
+        setWordsError('');
+        return;
+      }
+
+      setLoadingWords(true);
+      setWordsError('');
+
+      try {
+        const query = new URLSearchParams({
+          action: 'getWords',
+          lang: targetSheetLang || DEFAULT_SHEET_LANG,
+          dueOnly: 'true',
+        });
+        const separator = cleanUrl.includes('?') ? '&' : '?';
+        const response = await fetch(`${cleanUrl}${separator}${query.toString()}`, {
+          method: 'GET',
+          redirect: 'follow',
+          credentials: 'omit',
+        });
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            const copy = I18N[langKey] || I18N.vi;
+            throw new Error(copy.fetch404Hint);
+          }
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const json = await response.json();
+        if (!json || json.success === false) {
+          throw new Error(json?.error || 'Invalid response');
+        }
+
+        const list = Array.isArray(json.data) ? json.data : [];
+        setDueWords(list);
+        await syncExtensionBadge(list.length, list);
+      } catch (err) {
+        const copy = I18N[langKey] || I18N.vi;
+        setWordsError(copy.fetchErr(err?.message || 'Network error'));
+      } finally {
+        setLoadingWords(false);
+      }
+    },
+    [uiLang]
+  );
+
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const stored = await loadSyncSettings();
+        const [stored, cached] = await Promise.all([
+          loadSyncSettings(),
+          loadCachedDueWords(),
+        ]);
         if (!active) return;
-        setGasUrl((stored.GAS_WEB_APP_URL || '').trim());
-        setWebAppUrl((stored.WEB_APP_URL || '').trim());
+
+        const savedUiLang = stored.UI_LANG === 'en' ? 'en' : 'vi';
+        const savedGas = String(stored.GAS_WEB_APP_URL || '').trim();
+        const savedWeb = String(stored.WEB_APP_URL || '').trim();
+        const savedSheet =
+          String(stored.NOTE_WORD_LANG || DEFAULT_SHEET_LANG).trim() ||
+          DEFAULT_SHEET_LANG;
+
+        setUiLang(savedUiLang);
+        setGasUrl(savedGas);
+        setWebAppUrl(savedWeb);
+        setSheetLang(savedSheet);
+
+        if (cached && savedGas) {
+          setDueWords(cached);
+        }
+
+        if (savedGas) {
+          fetchDueWords(savedGas, savedSheet, savedUiLang);
+        }
       } catch (err) {
-        if (active) setErrorMsg('Không thể đọc cài đặt: ' + err.message);
+        if (active) {
+          setErrorMsg(I18N.vi.loadSettingsErr(err.message));
+        }
       } finally {
         if (active) setLoaded(true);
       }
     })();
+
     return () => {
       active = false;
     };
-  }, []);
+  }, [fetchDueWords]);
 
-  const handleSave = async (e) => {
+  const handleChangeUiLang = async (nextLang) => {
+    const normalized = nextLang === 'en' ? 'en' : 'vi';
+    setUiLang(normalized);
+    await saveSyncSettings({ UI_LANG: normalized });
+  };
+
+  const toggleWordReveal = (id) => {
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveSettings = async (e) => {
     e.preventDefault();
     setErrorMsg('');
     setStatusMsg('');
 
-    const trimmedGas = gasUrl.trim();
+    const trimmedGas = normalizeGasUrl(gasUrl);
     const trimmedWeb = webAppUrl.trim();
 
     if (!trimmedGas) {
       setGasInvalid(true);
-      setErrorMsg('Vui lòng nhập GAS_WEB_APP_URL.');
+      setErrorMsg(t.gasRequired);
       return;
     }
 
@@ -81,14 +336,19 @@ export default function Popup() {
       await saveSyncSettings({
         GAS_WEB_APP_URL: trimmedGas,
         WEB_APP_URL: trimmedWeb,
-        NOTE_WORD_LANG: lang,
+        NOTE_WORD_LANG: sheetLang,
+        UI_LANG: uiLang,
       });
       setGasUrl(trimmedGas);
       setWebAppUrl(trimmedWeb);
-      setStatusMsg('Đã lưu cài đặt thành công.');
-      setTimeout(() => setStatusMsg(''), 3000);
+      setStatusMsg(t.savedSuccess);
+      await fetchDueWords(trimmedGas, sheetLang, uiLang);
+      setTimeout(() => {
+        setStatusMsg('');
+        setView('words');
+      }, 900);
     } catch (err) {
-      setErrorMsg('Lỗi lưu cài đặt: ' + err.message);
+      setErrorMsg(t.saveSettingsErr(err.message));
     }
   };
 
@@ -104,168 +364,433 @@ export default function Popup() {
   const isConfigured = Boolean(gasUrl.trim());
 
   return (
-    <div className="w-[360px] bg-slate-50 p-4 text-slate-900">
-      {/* Header */}
-      <header className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-xs font-bold text-white shadow-xs">
-            NW
-          </span>
-          <div>
-            <h1 className="text-sm font-bold tracking-tight text-slate-900">
-              NoteWords
-            </h1>
-            <p className="text-[11px] text-slate-500">
-              Quét chọn từ tiếng Anh để lưu nhanh
-            </p>
+    <div className="w-[380px] bg-slate-50 text-slate-900">
+      {/* Blue Top Header */}
+      <header className="border-b border-blue-100 bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-3 text-white shadow-xs">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/15 text-xs font-extrabold tracking-tight text-white ring-1 ring-white/30">
+              NW
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-bold tracking-tight text-white">
+                NoteWords
+              </h1>
+              <p className="truncate text-[11px] text-blue-100">{t.subtitle}</p>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            {/* VI / EN Quick Switcher */}
+            <div
+              role="group"
+              aria-label={t.langGroupAria}
+              className="inline-flex rounded-lg bg-blue-800/60 p-0.5 ring-1 ring-white/15"
+            >
+              <button
+                type="button"
+                onClick={() => handleChangeUiLang('vi')}
+                aria-pressed={uiLang === 'vi'}
+                className={`rounded-md px-2 py-1 text-[11px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-white ${
+                  uiLang === 'vi'
+                    ? 'nw-active-pill bg-white text-blue-700 shadow-2xs'
+                    : 'text-blue-100 hover:text-white'
+                }`}
+              >
+                VI
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChangeUiLang('en')}
+                aria-pressed={uiLang === 'en'}
+                className={`rounded-md px-2 py-1 text-[11px] font-bold transition-colors focus-visible:outline-2 focus-visible:outline-white ${
+                  uiLang === 'en'
+                    ? 'nw-active-pill bg-white text-blue-700 shadow-2xs'
+                    : 'text-blue-100 hover:text-white'
+                }`}
+              >
+                EN
+              </button>
+            </div>
+
+            {/* Settings Toggle Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMsg('');
+                setStatusMsg('');
+                setView((prev) => (prev === 'settings' ? 'words' : 'settings'));
+              }}
+              aria-label={view === 'settings' ? t.backToWords : t.openSettingsAria}
+              title={view === 'settings' ? t.backToWords : t.openSettingsAria}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-white ${
+                view === 'settings'
+                  ? 'bg-white text-blue-700 shadow-2xs'
+                  : 'bg-blue-800/50 text-blue-50 ring-1 ring-white/15 hover:bg-blue-800/80'
+              }`}
+            >
+              <Settings className="h-4 w-4" aria-hidden="true" />
+            </button>
           </div>
         </div>
-
-        <span
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-            isConfigured
-              ? 'bg-emerald-100 text-emerald-800'
-              : 'bg-amber-100 text-amber-800'
-          }`}
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              isConfigured ? 'bg-emerald-600' : 'bg-amber-500'
-            }`}
-          />
-          {isConfigured ? 'Sẵn sàng' : 'Chưa cấu hình'}
-        </span>
       </header>
 
-      {/* Settings Form */}
-      <form
-        onSubmit={handleSave}
-        className="space-y-3.5 rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs"
-      >
-        {/* GAS_WEB_APP_URL */}
-        <div className="space-y-1">
-          <label
-            htmlFor="gas-url"
-            className="block text-xs font-semibold text-slate-800"
-          >
-            GAS_WEB_APP_URL
-          </label>
-          <p id="gas-url-hint" className="text-[11px] text-slate-500">
-            URL Web App đã deploy từ Google Apps Script
-          </p>
-          <input
-            id="gas-url"
-            type="url"
-            required
-            disabled={!loaded}
-            value={gasUrl}
-            onChange={(e) => {
-              setGasUrl(e.target.value);
-              setStatusMsg('');
-              if (gasInvalid) setGasInvalid(e.target.matches(':user-invalid'));
-            }}
-            onBlur={(e) => setGasInvalid(e.target.matches(':user-invalid'))}
-            onInvalid={() => setGasInvalid(true)}
-            aria-invalid={gasInvalid ? 'true' : 'false'}
-            aria-describedby={gasInvalid ? 'gas-url-hint gas-url-err' : 'gas-url-hint'}
-            placeholder="https://script.google.com/macros/s/.../exec"
-            className="validated-input w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:opacity-60"
-          />
-          <div
-            id="gas-url-err"
-            className="field-error-msg items-center gap-1 text-[11px] font-medium text-rose-600"
-          >
-            <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span>Nhập URL hợp lệ bắt đầu bằng https://</span>
+      {/* Main Content */}
+      <div className="p-4">
+        {view === 'words' ? (
+          <div className="space-y-3.5">
+            {/* Section Title + Due Count Badge + Quick Controls */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                  <BookOpen className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <h2 className="text-sm font-bold text-slate-900">
+                  {t.wordsHeading}
+                </h2>
+                <span
+                  aria-label={t.dueCountAria(dueWords.length)}
+                  className={`nw-count-badge inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold ${
+                    dueWords.length > 0
+                      ? 'bg-blue-600 text-white shadow-2xs'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {dueWords.length}
+                </span>
+              </div>
+
+              {isConfigured && (
+                <div className="flex items-center gap-1">
+                  {dueWords.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowMeanings((prev) => !prev)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600"
+                    >
+                      {showMeanings ? (
+                        <EyeOff className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
+                      )}
+                      <span>{showMeanings ? t.hideMeaning : t.showMeaning}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={loadingWords}
+                    onClick={() => fetchDueWords(gasUrl, sheetLang, uiLang)}
+                    aria-label={t.refreshAria}
+                    title={t.refreshAria}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${loadingWords ? 'animate-spin text-blue-600' : ''}`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Body States */}
+            {!loaded ? (
+              <div className="flex min-h-[180px] items-center justify-center rounded-2xl border border-slate-200 bg-white p-6">
+                <Loader2 className="h-6 w-6 animate-spin text-blue-600" aria-hidden="true" />
+              </div>
+            ) : !isConfigured ? (
+              <div className="rounded-2xl border border-blue-200 bg-gradient-to-b from-blue-50/80 to-white p-5 text-center shadow-2xs">
+                <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+                  <Sparkles className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <h3 className="mt-3 text-sm font-bold text-slate-900">
+                  {t.unconfiguredTitle}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  {t.unconfiguredDesc}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setView('settings')}
+                  className="mt-4 inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                >
+                  <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{t.goToSettings}</span>
+                </button>
+              </div>
+            ) : loadingWords && dueWords.length === 0 ? (
+              <div className="flex min-h-[190px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-6 text-slate-500">
+                <Loader2 className="h-6 w-6 animate-spin text-blue-600" aria-hidden="true" />
+                <p className="mt-2.5 text-xs font-medium">{t.loadingWords}</p>
+              </div>
+            ) : wordsError && dueWords.length === 0 ? (
+              <div
+                role="alert"
+                className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-center"
+              >
+                <AlertCircle className="mx-auto h-6 w-6 text-rose-600" aria-hidden="true" />
+                <p className="mt-2 text-xs font-medium text-rose-900">{wordsError}</p>
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fetchDueWords(gasUrl, sheetLang, uiLang)}
+                    className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+                  >
+                    <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                    <span>{t.retry}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('settings')}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Settings className="h-3 w-3" aria-hidden="true" />
+                    <span>{t.settingsTitle}</span>
+                  </button>
+                </div>
+              </div>
+            ) : dueWords.length === 0 ? (
+              <div className="rounded-2xl border border-blue-100 bg-white p-6 text-center shadow-2xs">
+                <CheckCircle2
+                  className="mx-auto h-9 w-9 text-blue-600"
+                  aria-hidden="true"
+                />
+                <h3 className="mt-2.5 text-sm font-bold text-slate-900">
+                  {t.allCaughtUpTitle}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  {t.allCaughtUpDesc}
+                </p>
+              </div>
+            ) : (
+              <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-0.5">
+                {dueWords.map((item) => {
+                  const isRevealed = showMeanings || revealedIds.has(item.id);
+                  const rep = Number(item.repetition) || 0;
+                  return (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        onClick={() => toggleWordReveal(item.id)}
+                        className="w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xs transition-colors hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline-2 focus-visible:outline-blue-600"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-sm font-bold text-slate-900">
+                            {item.word}
+                          </span>
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              rep === 0
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-sky-100 text-sky-800'
+                            }`}
+                          >
+                            {rep === 0 ? t.newBadge : t.repBadge(rep)}
+                          </span>
+                        </div>
+
+                        <div className="mt-1">
+                          {isRevealed ? (
+                            <p className="text-xs font-semibold text-blue-700">
+                              {item.meaning || (
+                                <span className="italic font-normal text-slate-400">
+                                  {t.noMeaning}
+                                </span>
+                              )}
+                            </p>
+                          ) : (
+                            <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
+                              {t.tapToReveal}
+                            </span>
+                          )}
+                        </div>
+
+                        {isRevealed && item.context && (
+                          <p className="mt-1.5 line-clamp-2 border-l-2 border-blue-200 pl-2 text-[11px] leading-relaxed text-slate-500">
+                            {item.context}
+                          </p>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {/* Launch Web App CTA */}
+            <button
+              type="button"
+              onClick={handleOpenWebApp}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+            >
+              <span>
+                {dueWords.length > 0
+                  ? t.openWebAppWithCount(dueWords.length)
+                  : t.openWebApp}
+              </span>
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           </div>
-        </div>
+        ) : (
+          /* Settings View */
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setView('words')}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{t.backToWords}</span>
+              </button>
 
-        {/* WEB_APP_URL */}
-        <div className="space-y-1">
-          <label
-            htmlFor="web-app-url"
-            className="block text-xs font-semibold text-slate-800"
-          >
-            WEB_APP_URL
-          </label>
-          <p id="web-url-hint" className="text-[11px] text-slate-500">
-            Mặc định: <code className="rounded bg-slate-100 px-1 text-slate-700">{DEFAULT_WEB_APP_URL}</code>
-          </p>
-          <input
-            id="web-app-url"
-            type="url"
-            disabled={!loaded}
-            value={webAppUrl}
-            onChange={(e) => {
-              setWebAppUrl(e.target.value);
-              setStatusMsg('');
-            }}
-            aria-describedby="web-url-hint"
-            placeholder={DEFAULT_WEB_APP_URL}
-            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:opacity-60"
-          />
-        </div>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                  isConfigured
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isConfigured ? 'bg-blue-600' : 'bg-amber-500'
+                  }`}
+                />
+                {isConfigured ? t.statusReady : t.statusMissing}
+              </span>
+            </div>
 
-        {/* Language Selector (Locked to English for Phase 1) */}
-        <div className="space-y-1">
-          <label
-            htmlFor="lang-select"
-            className="flex items-center gap-1 text-xs font-semibold text-slate-800"
-          >
-            <Globe className="h-3.5 w-3.5 text-indigo-500" aria-hidden="true" />
-            <span>Ngôn ngữ lưu từ</span>
-          </label>
-          <select
-            id="lang-select"
-            value={lang}
-            disabled
-            aria-label="Ngôn ngữ lưu từ (Giai đoạn 1 khóa ở English)"
-            className="w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-2.5 py-2 text-xs font-medium text-slate-600"
-          >
-            <option value="English">English (Giai đoạn 1)</option>
-          </select>
-        </div>
+            <form
+              onSubmit={handleSaveSettings}
+              className="space-y-3.5 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs"
+            >
+              <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
+                {t.settingsTitle}
+              </h2>
 
-        {/* Save Button */}
-        <button
-          type="submit"
-          disabled={!loaded}
-          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:opacity-60"
-        >
-          <Save className="h-3.5 w-3.5" aria-hidden="true" />
-          Lưu cài đặt
-        </button>
+              {/* GAS_WEB_APP_URL */}
+              <div className="space-y-1">
+                <label
+                  htmlFor="gas-url"
+                  className="block text-xs font-semibold text-slate-800"
+                >
+                  {t.gasLabel}
+                </label>
+                <p id="gas-url-hint" className="text-[11px] text-slate-500">
+                  {t.gasHint}
+                </p>
+                <input
+                  id="gas-url"
+                  type="url"
+                  required
+                  disabled={!loaded}
+                  value={gasUrl}
+                  onChange={(e) => {
+                    setGasUrl(e.target.value);
+                    setStatusMsg('');
+                    if (gasInvalid) setGasInvalid(e.target.matches(':user-invalid'));
+                  }}
+                  onBlur={(e) => setGasInvalid(e.target.matches(':user-invalid'))}
+                  onInvalid={() => setGasInvalid(true)}
+                  aria-invalid={gasInvalid ? 'true' : 'false'}
+                  aria-describedby={
+                    gasInvalid ? 'gas-url-hint gas-url-err' : 'gas-url-hint'
+                  }
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="validated-input w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none disabled:opacity-60"
+                />
+                <div
+                  id="gas-url-err"
+                  className="field-error-msg items-center gap-1 text-[11px] font-medium text-rose-600"
+                >
+                  <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                  <span>{t.gasError}</span>
+                </div>
+              </div>
 
-        {statusMsg && (
-          <div
-            role="status"
-            className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-800"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>{statusMsg}</span>
+              {/* WEB_APP_URL */}
+              <div className="space-y-1">
+                <label
+                  htmlFor="web-app-url"
+                  className="block text-xs font-semibold text-slate-800"
+                >
+                  {t.webUrlLabel}
+                </label>
+                <p id="web-url-hint" className="text-[11px] text-slate-500">
+                  {t.webUrlHintPrefix}{' '}
+                  <code className="rounded bg-slate-100 px-1 text-slate-700">
+                    {DEFAULT_WEB_APP_URL}
+                  </code>
+                </p>
+                <input
+                  id="web-app-url"
+                  type="url"
+                  disabled={!loaded}
+                  value={webAppUrl}
+                  onChange={(e) => {
+                    setWebAppUrl(e.target.value);
+                    setStatusMsg('');
+                  }}
+                  aria-describedby="web-url-hint"
+                  placeholder={DEFAULT_WEB_APP_URL}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none disabled:opacity-60"
+                />
+              </div>
+
+              {/* Display Language Selector */}
+              <div className="space-y-1">
+                <label
+                  htmlFor="ui-lang-select"
+                  className="flex items-center gap-1 text-xs font-semibold text-slate-800"
+                >
+                  <Globe className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
+                  <span>{t.uiLangLabel}</span>
+                </label>
+                <select
+                  id="ui-lang-select"
+                  value={uiLang}
+                  onChange={(e) => handleChangeUiLang(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none"
+                >
+                  <option value="vi">Tiếng Việt</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+
+              {/* Save Button */}
+              <button
+                type="submit"
+                disabled={!loaded}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-60"
+              >
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{t.saveBtn}</span>
+              </button>
+
+              {statusMsg && (
+                <div
+                  role="status"
+                  className="flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-medium text-blue-800"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-blue-600" aria-hidden="true" />
+                  <span>{statusMsg}</span>
+                </div>
+              )}
+
+              {errorMsg && (
+                <div
+                  role="alert"
+                  className="flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-800"
+                >
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+            </form>
           </div>
         )}
-
-        {errorMsg && (
-          <div
-            role="alert"
-            className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-medium text-rose-800"
-          >
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-      </form>
-
-      {/* Launch Web App */}
-      <button
-        type="button"
-        onClick={handleOpenWebApp}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-      >
-        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-        Mở trang ôn tập
-      </button>
+      </div>
     </div>
   );
 }

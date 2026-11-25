@@ -1,12 +1,16 @@
 @import "tailwindcss";
 
+:root {
+  accent-color: #2563eb;
+}
+
 .validated-input:user-invalid {
   border-color: #dc2626;
   background-color: #fef2f2;
 }
 
 .validated-input:user-valid {
-  border-color: #16a34a;
+  border-color: #2563eb;
 }
 
 .validated-input + .field-error-msg {
@@ -15,4 +19,11 @@
 
 .validated-input:user-invalid + .field-error-msg {
   display: flex;
+}
+
+@media (forced-colors: active) {
+  .nw-count-badge,
+  .nw-active-pill {
+    border: 1px solid ButtonText;
+  }
 }

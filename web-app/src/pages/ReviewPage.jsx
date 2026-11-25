@@ -11,8 +11,14 @@ import Flashcard from '../components/Flashcard';
 import ReviewControls from '../components/ReviewControls';
 import { getWords, updateReview } from '../utils/api';
 import { RATING, calculateSM2 } from '../utils/sm2';
+import { getTranslations } from '../utils/i18n';
 
-export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
+export default function ReviewPage({
+  apiUrl,
+  currentLang,
+  uiLang = 'vi',
+  onOpenSettings,
+}) {
   const [dueOnly, setDueOnly] = useState(true);
   const [queue, setQueue] = useState([]);
   const [totalInitial, setTotalInitial] = useState(0);
@@ -22,7 +28,9 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
   const [error, setError] = useState('');
   const [pendingSyncs, setPendingSyncs] = useState(0);
   const [syncError, setSyncError] = useState('');
-  const [requeuedNotice, setRequeuedNotice] = useState('');
+  const [requeuedWord, setRequeuedWord] = useState('');
+
+  const t = getTranslations(uiLang).review;
 
   const loadCards = useCallback(
     async (targetDueOnly = dueOnly) => {
@@ -37,7 +45,7 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
       setLoading(true);
       setError('');
       setIsFlipped(false);
-      setRequeuedNotice('');
+      setRequeuedWord('');
 
       try {
         const words = await getWords({ lang: currentLang, dueOnly: targetDueOnly });
@@ -45,13 +53,13 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
         setTotalInitial(words.length);
         setReviewedCount(0);
       } catch (err) {
-        setError(err.message || 'Không thể tải danh sách từ cần ôn.');
+        setError(err.message || t.loadError);
         setQueue([]);
       } finally {
         setLoading(false);
       }
     },
-    [apiUrl, currentLang, dueOnly]
+    [apiUrl, currentLang, dueOnly, t.loadError]
   );
 
   useEffect(() => {
@@ -79,23 +87,20 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
         lastReviewedAt: sm2Result.lastReviewedAt,
       };
 
-      // Optimistic UI update: immediately advance the queue
       setIsFlipped(false);
       setReviewedCount((prev) => prev + 1);
 
       if (quality === RATING.AGAIN) {
-        // Re-queue forgotten word at the end of current session for reinforcement
         setQueue((prev) => {
           const rest = prev.slice(1);
           return [...rest, updatedCard];
         });
-        setRequeuedNotice(`Đã đưa "${currentCard.word}" về cuối hàng đợi để ôn lại trong phiên này.`);
+        setRequeuedWord(currentCard.word);
       } else {
         setQueue((prev) => prev.slice(1));
-        setRequeuedNotice('');
+        setRequeuedWord('');
       }
 
-      // Sync UPDATE_REVIEW to Google Sheets in background
       setPendingSyncs((c) => c + 1);
       setSyncError('');
 
@@ -110,22 +115,24 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
         lang: currentLang,
       })
         .catch((err) => {
-          setSyncError(
-            `Không thể đồng bộ "${currentCard.word}" lên Google Sheets: ${err.message}`
-          );
+          setSyncError(t.syncError(currentCard.word, err.message));
         })
         .finally(() => {
           setPendingSyncs((c) => Math.max(0, c - 1));
         });
     },
-    [currentCard, currentLang]
+    [currentCard, currentLang, t]
   );
 
-  // Keyboard shortcuts: Space to flip, 1-4 to rate when flipped
   useEffect(() => {
     const onKeyDown = (e) => {
       const tag = e.target?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) {
+      if (
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        e.target?.isContentEditable
+      ) {
         return;
       }
       if (!currentCard || loading) return;
@@ -159,7 +166,9 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
 
   const completedUnique = Math.max(0, totalInitial - queue.length);
   const progressPercent =
-    totalInitial > 0 ? Math.min(100, Math.round((completedUnique / totalInitial) * 100)) : 0;
+    totalInitial > 0
+      ? Math.min(100, Math.round((completedUnique / totalInitial) * 100))
+      : 0;
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -167,41 +176,44 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-            Ôn tập Flashcards
+            {t.title}
           </h1>
           <p className="text-sm text-slate-500">
-            Tab <span className="font-medium text-slate-700">{currentLang}</span> ·{' '}
-            {dueOnly ? 'Các từ đến hạn hôm nay' : 'Tất cả từ vựng'}
+            {t.sheetPrefix}{' '}
+            <span className="font-semibold text-blue-700">{currentLang}</span> ·{' '}
+            {dueOnly ? t.modeDue : t.modeAll}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <div
             role="group"
-            aria-label="Chế độ lọc thẻ ôn tập"
-            className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-xs"
+            aria-label={t.filterGroupAria}
+            className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5 shadow-2xs"
           >
             <button
               type="button"
               onClick={() => setDueOnly(true)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              aria-pressed={dueOnly}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
                 dueOnly
-                  ? 'bg-indigo-600 text-white'
+                  ? 'bg-blue-600 text-white shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Đến hạn
+              {t.dueBtn}
             </button>
             <button
               type="button"
               onClick={() => setDueOnly(false)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              aria-pressed={!dueOnly}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
                 !dueOnly
-                  ? 'bg-indigo-600 text-white'
+                  ? 'bg-blue-600 text-white shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Ôn tất cả
+              {t.allBtn}
             </button>
           </div>
 
@@ -209,11 +221,14 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
             type="button"
             onClick={() => loadCards(dueOnly)}
             disabled={loading || !apiUrl}
-            aria-label="Tải lại danh sách ôn tập"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 disabled:opacity-50"
+            aria-label={t.reloadAria}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
-            Tải lại
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-blue-600' : ''}`}
+              aria-hidden="true"
+            />
+            {t.reloadBtn}
           </button>
         </div>
       </div>
@@ -223,23 +238,31 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>
-              Còn lại <strong className="text-slate-800">{queue.length}</strong> thẻ · Đã trả lời{' '}
-              <strong className="text-slate-800">{reviewedCount}</strong> lượt
+              {t.remainingPrefix}{' '}
+              <strong className="text-slate-800">{queue.length}</strong>{' '}
+              {t.remainingUnit} · {t.answeredPrefix}{' '}
+              <strong className="text-slate-800">{reviewedCount}</strong>{' '}
+              {t.answeredUnit}
             </span>
             <span className="inline-flex items-center gap-1">
               {pendingSyncs > 0 ? (
                 <>
-                  <CloudUpload className="h-3.5 w-3.5 animate-pulse text-indigo-600" aria-hidden="true" />
-                  <span className="text-indigo-600">Đang đồng bộ ({pendingSyncs})…</span>
+                  <CloudUpload
+                    className="h-3.5 w-3.5 animate-pulse text-blue-600"
+                    aria-hidden="true"
+                  />
+                  <span className="font-medium text-blue-600">
+                    {t.syncing(pendingSyncs)}
+                  </span>
                 </>
               ) : (
-                <span>{progressPercent}% hoàn thành</span>
+                <span>{t.completedPct(progressPercent)}</span>
               )}
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-blue-100">
             <div
-              className="h-full rounded-full bg-indigo-600 transition-all duration-300"
+              className="h-full rounded-full bg-blue-600 transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -247,15 +270,18 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
       )}
 
       {/* Notices */}
-      {requeuedNotice && (
-        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-medium text-amber-800">
-          <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>{requeuedNotice}</span>
+      {requeuedWord && (
+        <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2.5 text-xs font-medium text-blue-900">
+          <RotateCcw className="h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
+          <span>{t.requeuedNotice(requeuedWord)}</span>
         </div>
       )}
 
       {syncError && (
-        <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800"
+        >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{syncError}</span>
         </div>
@@ -263,78 +289,86 @@ export default function ReviewPage({ apiUrl, currentLang, onOpenSettings }) {
 
       {/* Main Content Area */}
       {!apiUrl ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-          <p className="text-sm font-medium text-slate-700">
-            Bạn chưa cấu hình Google Apps Script Web App URL.
-          </p>
+        <div className="rounded-2xl border border-dashed border-blue-200 bg-white p-10 text-center">
+          <p className="text-sm font-medium text-slate-700">{t.noApiPrompt}</p>
           <button
             type="button"
             onClick={onOpenSettings}
-            className="mt-4 inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+            className="mt-4 inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
           >
-            Mở trang Cài đặt
+            {t.openSettings}
           </button>
         </div>
       ) : loading ? (
         <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 text-slate-500">
-          <Loader2 className="h-7 w-7 animate-spin text-indigo-600" aria-hidden="true" />
-          <p className="mt-3 text-sm font-medium">Đang tải từ vựng từ Google Sheets…</p>
+          <Loader2 className="h-7 w-7 animate-spin text-blue-600" aria-hidden="true" />
+          <p className="mt-3 text-sm font-medium">{t.loadingCards}</p>
         </div>
       ) : error ? (
-        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center">
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center"
+        >
           <AlertCircle className="mx-auto h-8 w-8 text-rose-500" aria-hidden="true" />
           <p className="mt-2 text-sm font-semibold text-rose-900">{error}</p>
           <button
             type="button"
             onClick={() => loadCards(dueOnly)}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            Thử lại
+            {t.retry}
           </button>
         </div>
       ) : currentCard ? (
         <div className="space-y-5">
-          <Flashcard card={currentCard} isFlipped={isFlipped} onFlip={handleFlip} />
+          <Flashcard
+            card={currentCard}
+            isFlipped={isFlipped}
+            onFlip={handleFlip}
+            uiLang={uiLang}
+          />
           <ReviewControls
             card={currentCard}
             isFlipped={isFlipped}
             onFlip={handleFlip}
             onRate={handleRate}
+            uiLang={uiLang}
           />
         </div>
       ) : (
-        <div className="rounded-2xl border border-emerald-200 bg-white p-10 text-center shadow-xs">
-          <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" aria-hidden="true" />
+        <div className="rounded-2xl border border-blue-200 bg-white p-10 text-center shadow-xs">
+          <CheckCircle2
+            className="mx-auto h-12 w-12 text-blue-600"
+            aria-hidden="true"
+          />
           <h2 className="mt-3 text-lg font-bold text-slate-900">
             {totalInitial > 0
-              ? 'Xuất sắc! Bạn đã hoàn thành phiên ôn tập.'
+              ? t.doneSession
               : dueOnly
-                ? 'Không có từ nào đến hạn ôn hôm nay!'
-                : 'Chưa có từ vựng nào trong tab này.'}
+                ? t.emptyDue
+                : t.emptySheet}
           </h2>
           <p className="mt-1.5 text-sm text-slate-500">
-            {dueOnly
-              ? 'Bạn có thể chuyển sang chế độ "Ôn tất cả" nếu muốn luyện tập thêm.'
-              : 'Hãy dùng Chrome Extension hoặc API để thêm từ mới vào Google Sheets.'}
+            {dueOnly ? t.dueHint : t.emptyHint}
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-2.5">
             {dueOnly && (
               <button
                 type="button"
                 onClick={() => setDueOnly(false)}
-                className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-blue-700"
               >
-                Xem & ôn tất cả từ
+                {t.reviewAllCta}
               </button>
             )}
             <button
               type="button"
               onClick={() => loadCards(dueOnly)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              Kiểm tra lại
+              {t.checkAgain}
             </button>
           </div>
         </div>

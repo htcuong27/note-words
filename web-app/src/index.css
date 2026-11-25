@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+:root {
+  accent-color: #2563eb;
+}
+
 /* ========================================================================== *
  * Modern Form Validation (:user-invalid / :user-valid)
  * ========================================================================== */
@@ -9,7 +13,7 @@
 }
 
 .validated-input:user-valid {
-  border-color: #16a34a;
+  border-color: #2563eb;
 }
 
 .validated-input + .field-error-msg {
@@ -39,6 +43,14 @@
   --col-3: "Ngữ cảnh";
   --col-4: "Ôn kế tiếp";
   --col-5: "Thao tác";
+}
+
+[data-ui-lang="en"] .word-table {
+  --col-1: "Word";
+  --col-2: "Meaning";
+  --col-3: "Context";
+  --col-4: "Next Review";
+  --col-5: "Actions";
 }
 
 .word-table thead {
@@ -157,5 +169,13 @@
 @media (prefers-reduced-motion: reduce) {
   .flashcard-inner {
     transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  [aria-current="page"],
+  .nw-lang-active,
+  .flashcard-face {
+    border: 1px solid ButtonText;
   }
 }

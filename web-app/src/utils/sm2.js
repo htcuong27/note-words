@@ -21,6 +21,7 @@ export const REVIEW_OPTIONS = [
     key: 'again',
     label: 'Again',
     viLabel: 'Quên',
+    enSubLabel: 'Reset',
     quality: RATING.AGAIN,
   },
   {
@@ -28,6 +29,7 @@ export const REVIEW_OPTIONS = [
     key: 'hard',
     label: 'Hard',
     viLabel: 'Khó',
+    enSubLabel: 'Challenging',
     quality: RATING.HARD,
   },
   {
@@ -35,6 +37,7 @@ export const REVIEW_OPTIONS = [
     key: 'good',
     label: 'Good',
     viLabel: 'Tốt',
+    enSubLabel: 'Recalled',
     quality: RATING.GOOD,
   },
   {
@@ -42,6 +45,7 @@ export const REVIEW_OPTIONS = [
     key: 'easy',
     label: 'Easy',
     viLabel: 'Dễ',
+    enSubLabel: 'Effortless',
     quality: RATING.EASY,
   },
 ];
@@ -76,11 +80,6 @@ export function isWordDue(word, now = new Date()) {
 
 /**
  * Calculate the next SM-2 state for a card given a quality score (1, 3, 4, or 5).
- *
- * @param {object} card - { repetition, interval, easeFactor }
- * @param {number} quality - SM-2 quality (Again=1, Hard=3, Good=4, Easy=5)
- * @param {Date} [now=new Date()]
- * @returns {{ repetition: number, interval: number, easeFactor: number, nextReviewDate: string, nextReview: string, lastReviewedAt: string }}
  */
 export function calculateSM2(card, quality, now = new Date()) {
   const q = Number(quality);
@@ -92,7 +91,6 @@ export function calculateSM2(card, quality, now = new Date()) {
       : DEFAULT_EASE_FACTOR;
 
   if (q < 3) {
-    // Again: reset repetition progress
     repetition = 0;
     interval = 1;
   } else {
@@ -126,18 +124,24 @@ export function calculateSM2(card, quality, now = new Date()) {
 }
 
 /**
- * Preview interval labels (in Vietnamese) for each of the 4 review options.
+ * Preview interval labels (localized) for each of the 4 review options.
  */
-export function previewNextIntervals(card, now = new Date()) {
+export function previewNextIntervals(card, uiLang = 'vi', now = new Date()) {
   const previews = {};
   for (const opt of REVIEW_OPTIONS) {
     const result = calculateSM2(card, opt.quality, now);
-    previews[opt.quality] = formatIntervalLabel(result.interval);
+    previews[opt.quality] = formatIntervalLabel(result.interval, uiLang);
   }
   return previews;
 }
 
-export function formatIntervalLabel(days) {
+export function formatIntervalLabel(days, uiLang = 'vi') {
+  if (uiLang === 'en') {
+    if (days <= 1) return '1 day';
+    if (days < 30) return `${days} days`;
+    const months = Math.round((days / 30) * 10) / 10;
+    return `${months} mo`;
+  }
   if (days <= 1) return '1 ngày';
   if (days < 30) return `${days} ngày`;
   const months = Math.round((days / 30) * 10) / 10;

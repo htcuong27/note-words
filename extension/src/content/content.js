@@ -2,10 +2,9 @@
  * NoteWords Content Script (Manifest V3)
  *
  * - Listens to text selection (`mouseup`) on web pages.
- * - Renders an isolated Floating Save Button & Toast inside a Shadow DOM root
+ * - Renders an isolated Blue Floating Save Button & Toast inside a Shadow DOM root
  *   so host page CSS never conflicts with extension UI.
- * - Extracts `word`, surrounding `context`, `sourceUrl`, and `lang` ("English"),
- *   then sends them to `background.js` via `chrome.runtime.sendMessage`.
+ * - Supports Vietnamese (`vi`) and English (`en`) UI language from `chrome.storage.sync`.
  */
 
 (function initNoteWordsContentScript() {
@@ -17,6 +16,33 @@
   const MAX_WORD_LENGTH = 120;
   const MAX_CONTEXT_LENGTH = 360;
 
+  const COPY = {
+    vi: {
+      saveBtn: '+ Lưu từ',
+      saving: 'Đang lưu…',
+      connErr: (msg) => `Lỗi kết nối Extension: ${msg}`,
+      noResp: 'Không nhận được phản hồi từ background.',
+      duplicate: (w) => `Từ "${w}" đã tồn tại trong sổ từ.`,
+      saved: (w, m) => `Đã lưu "${w}"${m}`,
+      missingUrl:
+        'Chưa cấu hình GAS_WEB_APP_URL. Hãy mở cài đặt trong popup NoteWords để nhập link.',
+      saveFailed: 'Không thể lưu từ. Vui lòng thử lại.',
+      sendErr: (msg) => `Lỗi gửi dữ liệu: ${msg}`,
+    },
+    en: {
+      saveBtn: '+ Save word',
+      saving: 'Saving…',
+      connErr: (msg) => `Extension connection error: ${msg}`,
+      noResp: 'No response received from background service.',
+      duplicate: (w) => `"${w}" is already in your vocabulary list.`,
+      saved: (w, m) => `Saved "${w}"${m}`,
+      missingUrl:
+        'GAS_WEB_APP_URL is not set. Open NoteWords popup settings to add your link.',
+      saveFailed: 'Failed to save word. Please try again.',
+      sendErr: (msg) => `Failed to send data: ${msg}`,
+    },
+  };
+
   let shadowRoot = null;
   let hostEl = null;
   let floatBtn = null;
@@ -24,6 +50,38 @@
   let toastTimer = null;
   let currentPayload = null;
   let isSaving = false;
+  let uiLang = 'vi';
+
+  function t() {
+    return COPY[uiLang] || COPY.vi;
+  }
+
+  async function syncUiLang() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
+        const stored = await chrome.storage.sync.get(['UI_LANG']);
+        uiLang = stored.UI_LANG === 'en' ? 'en' : 'vi';
+        if (floatBtn && !isSaving) {
+          floatBtn.textContent = t().saveBtn;
+        }
+      }
+    } catch {
+      // Ignore storage access errors on restricted pages
+    }
+  }
+
+  syncUiLang();
+
+  if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'sync' && changes.UI_LANG) {
+        uiLang = changes.UI_LANG.newValue === 'en' ? 'en' : 'vi';
+        if (floatBtn && !isSaving) {
+          floatBtn.textContent = t().saveBtn;
+        }
+      }
+    });
+  }
 
   function ensureShadowUI() {
     if (shadowRoot && document.contains(hostEl)) return;
@@ -51,23 +109,23 @@
         display: none;
         align-items: center;
         gap: 6px;
-        padding: 6px 12px;
-        border: 1px solid #4338ca;
+        padding: 6px 13px;
+        border: 1px solid #1d4ed8;
         border-radius: 9999px;
-        background: #4f46e5;
+        background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
         color: #ffffff;
         font-size: 12px;
         font-weight: 600;
         line-height: 1.2;
         cursor: pointer;
         pointer-events: auto;
-        box-shadow: 0 8px 20px -4px rgba(15, 23, 42, 0.3);
-        transition: transform 0.12s ease, background-color 0.12s ease, opacity 0.12s ease;
+        box-shadow: 0 8px 20px -4px rgba(37, 99, 235, 0.45);
+        transition: transform 0.12s ease, background 0.12s ease, opacity 0.12s ease;
         user-select: none;
       }
 
       .nw-btn:hover:not(:disabled) {
-        background: #4338ca;
+        background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
         transform: translateY(-1px);
       }
 
@@ -76,7 +134,7 @@
       }
 
       .nw-btn:disabled {
-        opacity: 0.85;
+        opacity: 0.88;
         cursor: wait;
       }
 
@@ -124,8 +182,8 @@
       }
 
       .nw-toast.success {
-        background: #065f46;
-        border: 1px solid #059669;
+        background: #1e40af;
+        border: 1px solid #3b82f6;
       }
 
       .nw-toast.warning {
@@ -142,7 +200,7 @@
     floatBtn = document.createElement('button');
     floatBtn.type = 'button';
     floatBtn.className = 'nw-btn';
-    floatBtn.textContent = '+ Lưu từ';
+    floatBtn.textContent = t().saveBtn;
 
     // Prevent mousedown on button from clearing the page's text selection
     floatBtn.addEventListener('mousedown', (e) => {
@@ -185,7 +243,7 @@
     if (floatBtn) {
       floatBtn.classList.remove('visible');
       floatBtn.disabled = false;
-      floatBtn.textContent = '+ Lưu từ';
+      floatBtn.textContent = t().saveBtn;
     }
     currentPayload = null;
     isSaving = false;
@@ -197,9 +255,6 @@
     return tag === 'input' || tag === 'textarea' || target.isContentEditable;
   }
 
-  /**
-   * Extract the nearest sentence or short paragraph containing the selected word.
-   */
   function extractContext(selection, selectedWord) {
     if (!selection || selection.rangeCount === 0) return selectedWord;
 
@@ -238,7 +293,6 @@
 
     if (!rawText) return selectedWord;
     if (rawText.length <= MAX_CONTEXT_LENGTH) {
-      // Try extracting the exact sentence if there are multiple sentences
       const sentences = rawText.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
       if (sentences && sentences.length > 1) {
         const lowerWord = selectedWord.toLowerCase();
@@ -248,7 +302,6 @@
       return rawText;
     }
 
-    // Long paragraph: extract sentence or window around the selected word
     const sentences = rawText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [rawText];
     const lowerWord = selectedWord.toLowerCase();
     const matchedSentence = sentences.find((s) => s.toLowerCase().includes(lowerWord));
@@ -272,7 +325,7 @@
 
   function positionButton(rect) {
     ensureShadowUI();
-    const btnWidth = 96;
+    const btnWidth = 104;
     const btnHeight = 32;
     const margin = 8;
 
@@ -292,66 +345,46 @@
     floatBtn.classList.add('visible');
   }
 
-  function handleSaveClick() {
+  async function handleSaveClick() {
     if (!currentPayload || isSaving) return;
 
     isSaving = true;
     const payloadToSend = { ...currentPayload };
+    const copy = t();
 
     floatBtn.disabled = true;
-    floatBtn.innerHTML = '<span class="nw-spinner"></span><span>Đang lưu…</span>';
+    floatBtn.innerHTML = `<span class="nw-spinner"></span><span>${copy.saving}</span>`;
 
     try {
-      chrome.runtime.sendMessage(
-        {
-          type: 'SAVE_WORD',
-          payload: payloadToSend,
-        },
-        (response) => {
-          const runtimeError = chrome.runtime.lastError;
-          hideButton();
+      const response = await chrome.runtime.sendMessage({
+        type: 'SAVE_WORD',
+        payload: payloadToSend,
+      });
 
-          if (runtimeError) {
-            showToast(
-              `Lỗi kết nối Extension: ${runtimeError.message}`,
-              'error'
-            );
-            return;
-          }
+      hideButton();
 
-          if (!response) {
-            showToast('Không nhận được phản hồi từ background.', 'error');
-            return;
-          }
+      if (!response) {
+        showToast(copy.noResp, 'error');
+        return;
+      }
 
-          if (response.ok) {
-            if (response.duplicate) {
-              showToast(
-                `Từ "${payloadToSend.word}" đã tồn tại trong sổ từ.`,
-                'warning'
-              );
-            } else {
-              const meaning = response.data?.meaning
-                ? ` → ${response.data.meaning}`
-                : '';
-              showToast(`Đã lưu "${payloadToSend.word}"${meaning}`, 'success');
-            }
-          } else if (response.code === 'MISSING_URL') {
-            showToast(
-              'Chưa cấu hình GAS_WEB_APP_URL. Hãy mở popup NoteWords để nhập URL.',
-              'warning'
-            );
-          } else {
-            showToast(
-              response.error || 'Không thể lưu từ. Vui lòng thử lại.',
-              'error'
-            );
-          }
+      if (response.ok) {
+        if (response.duplicate) {
+          showToast(copy.duplicate(payloadToSend.word), 'warning');
+        } else {
+          const meaning = response.data?.meaning
+            ? ` → ${response.data.meaning}`
+            : '';
+          showToast(copy.saved(payloadToSend.word, meaning), 'success');
         }
-      );
+      } else if (response.code === 'MISSING_URL') {
+        showToast(copy.missingUrl, 'warning');
+      } else {
+        showToast(response.error || copy.saveFailed, 'error');
+      }
     } catch (err) {
       hideButton();
-      showToast(`Lỗi gửi dữ liệu: ${err.message}`, 'error');
+      showToast(copy.connErr(err?.message || 'Unknown'), 'error');
     }
   }
 
@@ -373,7 +406,6 @@
       }
 
       const word = selection.toString().replace(/\s+/g, ' ').trim();
-      // Only show button for reasonable English text selections
       if (!word || word.length > MAX_WORD_LENGTH || !/[a-zA-Z]/.test(word)) {
         hideButton();
         return;
