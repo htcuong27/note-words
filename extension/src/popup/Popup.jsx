@@ -369,9 +369,11 @@ export default function Popup() {
       <header className="border-b border-blue-100 bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-3 text-white shadow-xs">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/15 text-xs font-extrabold tracking-tight text-white ring-1 ring-white/30">
-              NW
-            </span>
+            <img
+              src="/icons/icon48.png"
+              alt="NoteWords"
+              className="h-8 w-8 shrink-0 rounded-xl shadow-xs ring-1 ring-white/30"
+            />
             <div className="min-w-0">
               <h1 className="truncate text-sm font-bold tracking-tight text-white">
                 NoteWords

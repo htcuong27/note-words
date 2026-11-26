@@ -23,9 +23,11 @@ export default function Navbar({
           onClick={() => onNavigate('review')}
           className="flex items-center gap-2.5 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-sm font-extrabold text-white shadow-xs">
-            NW
-          </span>
+          <img
+            src="/logo.png"
+            alt="NoteWords"
+            className="h-9 w-9 shrink-0 rounded-xl shadow-xs"
+          />
           <div>
             <span className="block text-base font-bold tracking-tight text-slate-900">
               NoteWords
