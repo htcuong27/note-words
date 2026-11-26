@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   Check,
   Sparkles,
   Volume2,
@@ -47,19 +48,27 @@ export default function WordFillPractice({
   uiLang = 'vi',
   wrongAttempts = 0,
   blankIndices = [],
-  onWrongAttempt,
+  onWrongRequeue,
   onSuccess,
   onBackToCard,
 }) {
   const [inputs, setInputs] = useState({});
-  const [feedbackError, setFeedbackError] = useState(false);
+  const [failedWrongIndices, setFailedWrongIndices] = useState(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const inputRefs = useRef({});
+  const continueBtnRef = useRef(null);
   const passedRef = useRef(false);
   const lastFocusedBlankIdxRef = useRef(null);
 
+  const isFailed = Array.isArray(failedWrongIndices);
+  const wrongIndexSet = useMemo(
+    () => new Set(failedWrongIndices || []),
+    [failedWrongIndices]
+  );
+
   const t = getTranslations(uiLang).fillPractice;
   const flashT = getTranslations(uiLang).flashcard;
+  const controlsT = getTranslations(uiLang).controls;
   const speechAvailable = isSpeechSupported();
 
   const chars = useMemo(() => Array.from(String(card?.word || '')), [card?.word]);
@@ -93,6 +102,7 @@ export default function WordFillPractice({
 
   useEffect(() => {
     setInputs({});
+    setFailedWrongIndices(null);
     if (blankIndices.length > 0) {
       const firstIdx = blankIndices[0];
       requestAnimationFrame(() => {
@@ -102,8 +112,23 @@ export default function WordFillPractice({
   }, [card?.id, blankIndices]);
 
   useEffect(() => {
+    if (!isFailed) return;
+    requestAnimationFrame(() => {
+      continueBtnRef.current?.focus();
+    });
+    const onKeyDown = (e) => {
+      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        onWrongRequeue?.();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFailed, onWrongRequeue]);
+
+  useEffect(() => {
     passedRef.current = false;
-    setFeedbackError(false);
+    setFailedWrongIndices(null);
     return () => {
       setIsSpeaking(false);
       if (!passedRef.current) {
@@ -127,7 +152,7 @@ export default function WordFillPractice({
     const { isCorrect } = checkFillAnswer(card.word, blankIndices, nextInputs);
     if (!isCorrect) return false;
 
-    setFeedbackError(false);
+    setFailedWrongIndices(null);
     passedRef.current = true;
     onSuccess?.();
     return true;
@@ -139,6 +164,10 @@ export default function WordFillPractice({
       onEnd: () => setIsSpeaking(false),
       onError: () => setIsSpeaking(false),
     });
+    if (isFailed) {
+      continueBtnRef.current?.focus();
+      return;
+    }
     const targetIdx =
       lastFocusedBlankIdxRef.current !== null &&
       blankSet.has(lastFocusedBlankIdxRef.current)
@@ -238,16 +267,23 @@ export default function WordFillPractice({
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (isFailed) {
+      onWrongRequeue?.();
+      return;
+    }
     if (!allFilled) return;
 
-    const { isCorrect } = checkFillAnswer(card.word, blankIndices, inputs);
+    const { isCorrect, wrongIndices } = checkFillAnswer(
+      card.word,
+      blankIndices,
+      inputs
+    );
     if (isCorrect) {
-      setFeedbackError(false);
+      setFailedWrongIndices(null);
       passedRef.current = true;
       onSuccess?.();
     } else {
-      setFeedbackError(true);
-      onWrongAttempt?.();
+      setFailedWrongIndices(wrongIndices);
     }
   };
 
@@ -286,7 +322,7 @@ export default function WordFillPractice({
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleSpeak}
               aria-label={flashT.pronounceAria(card.word)}
-              title={flashT.pronounceTitle}
+              title={t.pronounceTitle}
               className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
                 isSpeaking
                   ? 'border-blue-500 bg-blue-600 text-white shadow-xs'
@@ -348,6 +384,7 @@ export default function WordFillPractice({
                       type="text"
                       maxLength={1}
                       value={inputs[index] || ''}
+                      disabled={isFailed}
                       onFocus={() => {
                         lastFocusedBlankIdxRef.current = index;
                       }}
@@ -362,8 +399,10 @@ export default function WordFillPractice({
                       autoCapitalize="none"
                       spellCheck={false}
                       className={`h-10 w-8 border-b-2 bg-transparent text-center font-mono text-xl font-bold transition-colors focus:outline-none sm:w-9 sm:text-2xl ${
-                        feedbackError
-                          ? 'border-rose-500 text-rose-700 focus:border-rose-600'
+                        isFailed
+                          ? wrongIndexSet.has(index)
+                            ? 'border-rose-500 text-rose-700'
+                            : 'border-emerald-500 text-emerald-700'
                           : 'border-blue-500 text-blue-700 focus:border-blue-700'
                       }`}
                     />
@@ -374,36 +413,70 @@ export default function WordFillPractice({
           })}
         </div>
 
-        {feedbackError && (
+        {isFailed && (
           <div
             role="alert"
-            className="flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-800"
+            className="space-y-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm text-rose-900"
           >
-            <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{t.wrongFeedback(blankIndices.length, totalFillable)}</span>
+            <div className="flex items-center justify-center gap-1.5 font-semibold text-rose-800">
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{t.wrongAnswerTitle}</span>
+            </div>
+            <p className="text-sm text-rose-800">
+              {t.correctAnswerLabel}{' '}
+              <strong className="rounded bg-white px-2 py-0.5 font-mono text-base font-bold text-slate-900 ring-1 ring-rose-200">
+                {card.word}
+              </strong>
+            </p>
+            <p className="text-xs text-rose-700">{t.requeueHint}</p>
           </div>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2.5">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onBackToCard}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-600"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            {t.backToCardBtn}
-          </button>
+          {!isFailed ? (
+            <>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={onBackToCard}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                {t.backToCardBtn}
+              </button>
 
-          <button
-            type="submit"
-            disabled={!allFilled}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Check className="h-4 w-4" aria-hidden="true" />
-            {t.checkBtn}
-          </button>
+              <button
+                type="submit"
+                disabled={!allFilled}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" aria-hidden="true" />
+                {t.checkBtn}
+              </button>
+            </>
+          ) : (
+            <button
+              ref={continueBtnRef}
+              type="button"
+              onClick={() => onWrongRequeue?.()}
+              className="mx-auto inline-flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-rose-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
+            >
+              <span>{t.continueNextBtn}</span>
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              <kbd className="rounded bg-rose-500/80 px-1.5 py-0.5 font-mono text-xs text-rose-50">
+                Enter
+              </kbd>
+            </button>
+          )}
         </div>
+
+        {speechAvailable && (
+          <p className="text-center text-xs text-slate-400">
+            {controlsT.shortcutsLabel}{' '}
+            <kbd className="font-mono text-slate-600">Alt + P</kbd>{' '}
+            {controlsT.pronounceLabel}
+          </p>
+        )}
       </form>
     </section>
   );

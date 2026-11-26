@@ -35,7 +35,7 @@ export default function ReviewPage({
   const [totalInitial, setTotalInitial] = useState(0);
   const [reviewedCount, setReviewedCount] = useState(0);
   const [stage, setStage] = useState('front'); // 'front' | 'back' | 'practice' | 'rate'
-  const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [wrongAttemptsById, setWrongAttemptsById] = useState({});
   const [blankIndices, setBlankIndices] = useState([]);
   const [practicePassed, setPracticePassed] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -49,7 +49,6 @@ export default function ReviewPage({
 
   const resetCardPractice = useCallback(() => {
     setStage('front');
-    setWrongAttempts(0);
     setBlankIndices([]);
     setPracticePassed(false);
   }, []);
@@ -62,12 +61,14 @@ export default function ReviewPage({
         setReviewedCount(0);
         setError('');
         setLastSyncedAt(null);
+        setWrongAttemptsById({});
         resetCardPractice();
         return;
       }
 
       setLoading(true);
       setError('');
+      setWrongAttemptsById({});
       resetCardPractice();
       setRequeuedWord('');
 
@@ -97,6 +98,9 @@ export default function ReviewPage({
   }, [loadCards, dueOnly]);
 
   const currentCard = queue[0] || null;
+  const currentWrongAttempts = currentCard
+    ? wrongAttemptsById[currentCard.id] || 0
+    : 0;
   const isFlipped = stage === 'back' || stage === 'rate';
 
   const handleFlip = useCallback(() => {
@@ -116,22 +120,30 @@ export default function ReviewPage({
       setStage('rate');
       return;
     }
+    const cardWrongCount = wrongAttemptsById[currentCard.id] || 0;
     setBlankIndices((prev) =>
-      prev.length > 0 ? prev : pickRandomBlankIndices(currentCard.word, 0)
+      prev.length > 0
+        ? prev
+        : pickRandomBlankIndices(currentCard.word, cardWrongCount)
     );
     setStage('practice');
-  }, [currentCard]);
+  }, [currentCard, wrongAttemptsById]);
 
-  const handleWrongAttempt = useCallback(() => {
+  const handleWrongRequeue = useCallback(() => {
     if (!currentCard) return;
-    setWrongAttempts((prev) => {
-      const nextWrong = prev + 1;
-      setBlankIndices((prevBlanks) =>
-        pickRandomBlankIndices(currentCard.word, nextWrong, prevBlanks)
-      );
-      return nextWrong;
+    stopSpeaking();
+    setWrongAttemptsById((prev) => ({
+      ...prev,
+      [currentCard.id]: (prev[currentCard.id] || 0) + 1,
+    }));
+    setQueue((prev) => {
+      if (prev.length <= 1) return [...prev];
+      const [first, ...rest] = prev;
+      return [...rest, first];
     });
-  }, [currentCard]);
+    setRequeuedWord(currentCard.word);
+    resetCardPractice();
+  }, [currentCard, resetCardPractice]);
 
   const handlePracticeSuccess = useCallback(() => {
     if (currentCard?.word) {
@@ -220,6 +232,17 @@ export default function ReviewPage({
 
   useEffect(() => {
     const onKeyDown = (e) => {
+      if (!currentCard || loading) return;
+
+      const isPKey = e.code === 'KeyP' || e.key.toLowerCase() === 'p';
+
+      // Alt+P works everywhere (including inside WordFillPractice inputs)
+      if (isPKey && e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        speakWord(currentCard.word, currentLang);
+        return;
+      }
+
       const tag = e.target?.tagName?.toLowerCase();
       if (
         tag === 'input' ||
@@ -229,7 +252,6 @@ export default function ReviewPage({
       ) {
         return;
       }
-      if (!currentCard || loading) return;
 
       if (e.code === 'Space' && stage !== 'practice') {
         e.preventDefault();
@@ -253,12 +275,7 @@ export default function ReviewPage({
         return;
       }
 
-      if (
-        e.key.toLowerCase() === 'p' &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey
-      ) {
+      if (isPKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         speakWord(currentCard.word, currentLang);
         return;
@@ -461,9 +478,9 @@ export default function ReviewPage({
               card={currentCard}
               lang={currentLang}
               uiLang={uiLang}
-              wrongAttempts={wrongAttempts}
+              wrongAttempts={currentWrongAttempts}
               blankIndices={blankIndices}
-              onWrongAttempt={handleWrongAttempt}
+              onWrongRequeue={handleWrongRequeue}
               onSuccess={handlePracticeSuccess}
               onBackToCard={handleBackToCard}
             />
@@ -486,8 +503,8 @@ export default function ReviewPage({
                     aria-hidden="true"
                   />
                   <span>
-                    {wrongAttempts > 0
-                      ? t.practicePassedWithRetries(wrongAttempts)
+                    {currentWrongAttempts > 0
+                      ? t.practicePassedWithRetries(currentWrongAttempts)
                       : t.practicePassed}
                   </span>
                 </div>

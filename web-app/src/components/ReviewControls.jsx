@@ -26,18 +26,25 @@ export default function ReviewControls({
 
   if (activeStage === 'front') {
     return (
-      <div className="flex justify-center">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onFlip}
-          className="inline-flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-        >
-          <span>{t.showAnswer}</span>
-          <kbd className="rounded bg-blue-500/80 px-1.5 py-0.5 font-mono text-xs text-blue-50">
-            Space
-          </kbd>
-        </button>
+      <div className="space-y-2.5">
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onFlip}
+            className="inline-flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+          >
+            <span>{t.showAnswer}</span>
+            <kbd className="rounded bg-blue-500/80 px-1.5 py-0.5 font-mono text-xs text-blue-50">
+              Space
+            </kbd>
+          </button>
+        </div>
+        <p className="text-center text-xs text-slate-400">
+          {t.shortcutsLabel} <kbd className="font-mono text-slate-600">Space</kbd>{' '}
+          {t.frontFlipHint} · <kbd className="font-mono text-slate-600">P</kbd>{' '}
+          {t.pronounceLabel}
+        </p>
       </div>
     );
   }

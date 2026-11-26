@@ -65,9 +65,15 @@ export const I18N = {
       instruction: 'Điền các ký tự còn thiếu vào ô gạch chân bên dưới',
       wrongFeedback: (b, t) =>
         `Chưa chính xác! Đã đổi vị trí ngẫu nhiên và tăng lên ${b}/${t} ký tự ẩn.`,
+      wrongAnswerTitle: 'Chưa chính xác!',
+      correctAnswerLabel: 'Đáp án đúng:',
+      requeueHint:
+        'Từ này sẽ được đưa về cuối hàng đợi để bạn học lại sau khi học xong các từ khác.',
       checkBtn: 'Kiểm tra',
+      continueNextBtn: 'Tiếp tục',
       backToCardBtn: 'Xem lại thẻ',
       inputAria: (pos, total) => `Ký tự cần điền ${pos} trên ${total}`,
+      pronounceTitle: 'Phát âm (Alt + P)',
     },
     cache: {
       justNow: 'Đồng bộ vừa xong',
@@ -91,6 +97,7 @@ export const I18N = {
     controls: {
       showAnswer: 'Hiển thị đáp án',
       startPractice: 'Điền từ để ghi nhớ',
+      frontFlipHint: 'Lật thẻ',
       backFlipHint: 'Lật lại',
       shortcutsLabel: 'Phím tắt:',
       pronounceLabel: 'Phát âm',
@@ -219,9 +226,15 @@ export const I18N = {
       instruction: 'Fill in the missing letters in the underlined blanks below',
       wrongFeedback: (b, t) =>
         `Not quite right! Randomized positions and increased to ${b}/${t} hidden letters.`,
+      wrongAnswerTitle: 'Not quite right!',
+      correctAnswerLabel: 'Correct answer:',
+      requeueHint:
+        'This word will be moved to the end of the queue to review again after the other words.',
       checkBtn: 'Check Answer',
+      continueNextBtn: 'Continue',
       backToCardBtn: 'Review card',
       inputAria: (pos, total) => `Missing letter ${pos} of ${total}`,
+      pronounceTitle: 'Pronounce (Alt + P)',
     },
     cache: {
       justNow: 'Synced just now',
@@ -245,6 +258,7 @@ export const I18N = {
     controls: {
       showAnswer: 'Show Answer',
       startPractice: 'Practice Spelling',
+      frontFlipHint: 'Flip card',
       backFlipHint: 'Flip back',
       shortcutsLabel: 'Shortcuts:',
       pronounceLabel: 'Pronounce',
