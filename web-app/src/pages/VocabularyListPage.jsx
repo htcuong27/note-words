@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw, Search } from 'lucide-react';
 import WordTable from '../components/WordTable';
-import { deleteWord, editWord, getWords } from '../utils/api';
+import {
+  deleteWord,
+  editWord,
+  getWords,
+  getWordsCacheMeta,
+} from '../utils/api';
 import { isWordDue } from '../utils/sm2';
-import { getTranslations } from '../utils/i18n';
+import { formatCacheAge, getTranslations } from '../utils/i18n';
 
 export default function VocabularyListPage({
   apiUrl,
@@ -17,27 +22,38 @@ export default function VocabularyListPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const t = getTranslations(uiLang).list;
 
-  const loadAllWords = useCallback(async () => {
-    if (!apiUrl) {
-      setWords([]);
-      setError('');
-      return;
-    }
+  const loadAllWords = useCallback(
+    async ({ forceRefresh = false } = {}) => {
+      if (!apiUrl) {
+        setWords([]);
+        setError('');
+        setLastSyncedAt(null);
+        return;
+      }
 
-    setLoading(true);
-    setError('');
-    try {
-      const data = await getWords({ lang: currentLang, dueOnly: false });
-      setWords(data);
-    } catch (err) {
-      setError(err.message || t.loadErr);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiUrl, currentLang, t.loadErr]);
+      setLoading(true);
+      setError('');
+      try {
+        const data = await getWords({
+          lang: currentLang,
+          dueOnly: false,
+          forceRefresh,
+        });
+        setWords(data);
+        const meta = getWordsCacheMeta({ lang: currentLang });
+        setLastSyncedAt(meta?.updatedAt || Date.now());
+      } catch (err) {
+        setError(err.message || t.loadErr);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [apiUrl, currentLang, t.loadErr]
+  );
 
   useEffect(() => {
     loadAllWords();
@@ -105,12 +121,13 @@ export default function VocabularyListPage({
             {t.sheetPrefix}{' '}
             <span className="font-semibold text-blue-700">{currentLang}</span> ·{' '}
             {t.summary(words.length, dueCount)}
+            {lastSyncedAt ? ` · ${formatCacheAge(lastSyncedAt, uiLang)}` : ''}
           </p>
         </div>
 
         <button
           type="button"
-          onClick={loadAllWords}
+          onClick={() => loadAllWords({ forceRefresh: true })}
           disabled={loading || !apiUrl}
           className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-2xs transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
         >
@@ -208,7 +225,7 @@ export default function VocabularyListPage({
           <p className="mt-2 text-sm font-semibold text-rose-900">{error}</p>
           <button
             type="button"
-            onClick={loadAllWords}
+            onClick={() => loadAllWords({ forceRefresh: true })}
             className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -220,6 +237,7 @@ export default function VocabularyListPage({
           words={filteredWords}
           onSaveEdit={handleSaveEdit}
           onDelete={handleDelete}
+          lang={currentLang}
           uiLang={uiLang}
         />
       )}

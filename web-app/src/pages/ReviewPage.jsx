@@ -9,9 +9,20 @@ import {
 } from 'lucide-react';
 import Flashcard from '../components/Flashcard';
 import ReviewControls from '../components/ReviewControls';
-import { getWords, updateReview } from '../utils/api';
+import WordFillPractice from '../components/WordFillPractice';
+import {
+  getWords,
+  getWordsCacheMeta,
+  patchCachedWord,
+  updateReview,
+} from '../utils/api';
 import { RATING, calculateSM2 } from '../utils/sm2';
-import { getTranslations } from '../utils/i18n';
+import { formatCacheAge, getTranslations } from '../utils/i18n';
+import { speakWord, stopSpeaking } from '../utils/speech';
+import {
+  getFillableIndices,
+  pickRandomBlankIndices,
+} from '../utils/wordFill';
 
 export default function ReviewPage({
   apiUrl,
@@ -23,35 +34,54 @@ export default function ReviewPage({
   const [queue, setQueue] = useState([]);
   const [totalInitial, setTotalInitial] = useState(0);
   const [reviewedCount, setReviewedCount] = useState(0);
-  const [isFlipped, setIsFlipped] = useState(false);
+  const [stage, setStage] = useState('front'); // 'front' | 'back' | 'practice' | 'rate'
+  const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [blankIndices, setBlankIndices] = useState([]);
+  const [practicePassed, setPracticePassed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [pendingSyncs, setPendingSyncs] = useState(0);
   const [syncError, setSyncError] = useState('');
   const [requeuedWord, setRequeuedWord] = useState('');
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const t = getTranslations(uiLang).review;
 
+  const resetCardPractice = useCallback(() => {
+    setStage('front');
+    setWrongAttempts(0);
+    setBlankIndices([]);
+    setPracticePassed(false);
+  }, []);
+
   const loadCards = useCallback(
-    async (targetDueOnly = dueOnly) => {
+    async (targetDueOnly = dueOnly, { forceRefresh = false } = {}) => {
       if (!apiUrl) {
         setQueue([]);
         setTotalInitial(0);
         setReviewedCount(0);
         setError('');
+        setLastSyncedAt(null);
+        resetCardPractice();
         return;
       }
 
       setLoading(true);
       setError('');
-      setIsFlipped(false);
+      resetCardPractice();
       setRequeuedWord('');
 
       try {
-        const words = await getWords({ lang: currentLang, dueOnly: targetDueOnly });
+        const words = await getWords({
+          lang: currentLang,
+          dueOnly: targetDueOnly,
+          forceRefresh,
+        });
         setQueue(words);
         setTotalInitial(words.length);
         setReviewedCount(0);
+        const meta = getWordsCacheMeta({ lang: currentLang });
+        setLastSyncedAt(meta?.updatedAt || Date.now());
       } catch (err) {
         setError(err.message || t.loadError);
         setQueue([]);
@@ -59,7 +89,7 @@ export default function ReviewPage({
         setLoading(false);
       }
     },
-    [apiUrl, currentLang, dueOnly, t.loadError]
+    [apiUrl, currentLang, dueOnly, resetCardPractice, t.loadError]
   );
 
   useEffect(() => {
@@ -67,27 +97,91 @@ export default function ReviewPage({
   }, [loadCards, dueOnly]);
 
   const currentCard = queue[0] || null;
+  const isFlipped = stage === 'back' || stage === 'rate';
 
   const handleFlip = useCallback(() => {
     if (!currentCard) return;
-    setIsFlipped((prev) => !prev);
+    setStage((prev) => {
+      if (prev === 'practice') return prev;
+      if (prev === 'front') return practicePassed ? 'rate' : 'back';
+      return 'front';
+    });
+  }, [currentCard, practicePassed]);
+
+  const startPractice = useCallback(() => {
+    if (!currentCard) return;
+    const fillable = getFillableIndices(currentCard.word);
+    if (fillable.length === 0) {
+      setPracticePassed(true);
+      setStage('rate');
+      return;
+    }
+    setBlankIndices((prev) =>
+      prev.length > 0 ? prev : pickRandomBlankIndices(currentCard.word, 0)
+    );
+    setStage('practice');
   }, [currentCard]);
+
+  const handleWrongAttempt = useCallback(() => {
+    if (!currentCard) return;
+    setWrongAttempts((prev) => {
+      const nextWrong = prev + 1;
+      setBlankIndices((prevBlanks) =>
+        pickRandomBlankIndices(currentCard.word, nextWrong, prevBlanks)
+      );
+      return nextWrong;
+    });
+  }, [currentCard]);
+
+  const handlePracticeSuccess = useCallback(() => {
+    if (currentCard?.word) {
+      speakWord(currentCard.word, currentLang);
+    }
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    setPracticePassed(true);
+    setStage('rate');
+  }, [currentCard, currentLang]);
+
+  useEffect(() => {
+    if (stage === 'practice') return;
+    const active = document.activeElement;
+    const tag = active?.tagName?.toLowerCase();
+    if (tag === 'button' || tag === 'a') {
+      active.blur?.();
+    }
+  }, [stage]);
+
+  const handleBackToCard = useCallback(() => {
+    setStage('back');
+  }, []);
 
   const handleRate = useCallback(
     (quality) => {
       if (!currentCard) return;
 
       const sm2Result = calculateSM2(currentCard, quality);
-      const updatedCard = {
-        ...currentCard,
+      const sm2Patch = {
         repetition: sm2Result.repetition,
         interval: sm2Result.interval,
         easeFactor: sm2Result.easeFactor,
         nextReviewDate: sm2Result.nextReviewDate,
         lastReviewedAt: sm2Result.lastReviewedAt,
       };
+      const updatedCard = {
+        ...currentCard,
+        ...sm2Patch,
+      };
 
-      setIsFlipped(false);
+      stopSpeaking();
+      patchCachedWord({
+        id: currentCard.id,
+        patch: sm2Patch,
+        lang: currentLang,
+      });
+
+      resetCardPractice();
       setReviewedCount((prev) => prev + 1);
 
       if (quality === RATING.AGAIN) {
@@ -121,7 +215,7 @@ export default function ReviewPage({
           setPendingSyncs((c) => Math.max(0, c - 1));
         });
     },
-    [currentCard, currentLang, t]
+    [currentCard, currentLang, resetCardPractice, t]
   );
 
   useEffect(() => {
@@ -137,13 +231,40 @@ export default function ReviewPage({
       }
       if (!currentCard || loading) return;
 
-      if (e.code === 'Space') {
+      if (e.code === 'Space' && stage !== 'practice') {
         e.preventDefault();
+        const active = document.activeElement;
+        const activeTag = active?.tagName?.toLowerCase();
+        if (activeTag === 'button' || activeTag === 'a') {
+          active.blur?.();
+        }
         handleFlip();
         return;
       }
 
-      if (isFlipped) {
+      if (e.key === 'Enter' && stage === 'back') {
+        e.preventDefault();
+        const active = document.activeElement;
+        const activeTag = active?.tagName?.toLowerCase();
+        if (activeTag === 'button' || activeTag === 'a') {
+          active.blur?.();
+        }
+        startPractice();
+        return;
+      }
+
+      if (
+        e.key.toLowerCase() === 'p' &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        speakWord(currentCard.word, currentLang);
+        return;
+      }
+
+      if (stage === 'rate') {
         if (e.key === '1') {
           e.preventDefault();
           handleRate(RATING.AGAIN);
@@ -162,7 +283,15 @@ export default function ReviewPage({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentCard, loading, isFlipped, handleFlip, handleRate]);
+  }, [
+    currentCard,
+    currentLang,
+    loading,
+    stage,
+    handleFlip,
+    startPractice,
+    handleRate,
+  ]);
 
   const completedUnique = Math.max(0, totalInitial - queue.length);
   const progressPercent =
@@ -182,6 +311,7 @@ export default function ReviewPage({
             {t.sheetPrefix}{' '}
             <span className="font-semibold text-blue-700">{currentLang}</span> ·{' '}
             {dueOnly ? t.modeDue : t.modeAll}
+            {lastSyncedAt ? ` · ${formatCacheAge(lastSyncedAt, uiLang)}` : ''}
           </p>
         </div>
 
@@ -193,6 +323,7 @@ export default function ReviewPage({
           >
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setDueOnly(true)}
               aria-pressed={dueOnly}
               className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
@@ -205,6 +336,7 @@ export default function ReviewPage({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setDueOnly(false)}
               aria-pressed={!dueOnly}
               className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
@@ -219,7 +351,8 @@ export default function ReviewPage({
 
           <button
             type="button"
-            onClick={() => loadCards(dueOnly)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => loadCards(dueOnly, { forceRefresh: true })}
             disabled={loading || !apiUrl}
             aria-label={t.reloadAria}
             className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
@@ -313,7 +446,8 @@ export default function ReviewPage({
           <p className="mt-2 text-sm font-semibold text-rose-900">{error}</p>
           <button
             type="button"
-            onClick={() => loadCards(dueOnly)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => loadCards(dueOnly, { forceRefresh: true })}
             className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -322,19 +456,53 @@ export default function ReviewPage({
         </div>
       ) : currentCard ? (
         <div className="space-y-5">
-          <Flashcard
-            card={currentCard}
-            isFlipped={isFlipped}
-            onFlip={handleFlip}
-            uiLang={uiLang}
-          />
-          <ReviewControls
-            card={currentCard}
-            isFlipped={isFlipped}
-            onFlip={handleFlip}
-            onRate={handleRate}
-            uiLang={uiLang}
-          />
+          {stage === 'practice' ? (
+            <WordFillPractice
+              card={currentCard}
+              lang={currentLang}
+              uiLang={uiLang}
+              wrongAttempts={wrongAttempts}
+              blankIndices={blankIndices}
+              onWrongAttempt={handleWrongAttempt}
+              onSuccess={handlePracticeSuccess}
+              onBackToCard={handleBackToCard}
+            />
+          ) : (
+            <>
+              <Flashcard
+                card={currentCard}
+                isFlipped={isFlipped}
+                onFlip={handleFlip}
+                lang={currentLang}
+                uiLang={uiLang}
+              />
+              {stage === 'rate' && practicePassed && (
+                <div
+                  role="status"
+                  className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-medium text-emerald-800"
+                >
+                  <CheckCircle2
+                    className="h-4 w-4 shrink-0 text-emerald-600"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {wrongAttempts > 0
+                      ? t.practicePassedWithRetries(wrongAttempts)
+                      : t.practicePassed}
+                  </span>
+                </div>
+              )}
+              <ReviewControls
+                card={currentCard}
+                isFlipped={isFlipped}
+                stage={stage}
+                onFlip={handleFlip}
+                onStartPractice={startPractice}
+                onRate={handleRate}
+                uiLang={uiLang}
+              />
+            </>
+          )}
         </div>
       ) : (
         <div className="rounded-2xl border border-blue-200 bg-white p-10 text-center shadow-xs">
@@ -356,6 +524,7 @@ export default function ReviewPage({
             {dueOnly && (
               <button
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setDueOnly(false)}
                 className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-blue-700"
               >
@@ -364,7 +533,8 @@ export default function ReviewPage({
             )}
             <button
               type="button"
-              onClick={() => loadCards(dueOnly)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => loadCards(dueOnly, { forceRefresh: true })}
               className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />

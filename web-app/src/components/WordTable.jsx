@@ -1,17 +1,40 @@
-import { useState } from 'react';
-import { Check, ExternalLink, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, ExternalLink, Loader2, Pencil, Trash2, Volume2, X } from 'lucide-react';
 import { HighlightedContext } from './Flashcard';
 import { isWordDue } from '../utils/sm2';
 import { getTranslations } from '../utils/i18n';
+import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 
-export default function WordTable({ words, onSaveEdit, onDelete, uiLang = 'vi' }) {
+export default function WordTable({
+  words,
+  onSaveEdit,
+  onDelete,
+  lang = 'English',
+  uiLang = 'vi',
+}) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState({ word: '', meaning: '', context: '' });
   const [savingId, setSavingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [speakingId, setSpeakingId] = useState(null);
 
   const t = getTranslations(uiLang).table;
+  const speechAvailable = isSpeechSupported();
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
+  const handleSpeak = (item) => {
+    speakWord(item.word, lang, {
+      onStart: () => setSpeakingId(item.id),
+      onEnd: () => setSpeakingId((curr) => (curr === item.id ? null : curr)),
+      onError: () => setSpeakingId((curr) => (curr === item.id ? null : curr)),
+    });
+  };
 
   const startEdit = (item) => {
     setConfirmDeleteId(null);
@@ -119,8 +142,25 @@ export default function WordTable({ words, onSaveEdit, onDelete, uiLang = 'vi' }
                     />
                   ) : (
                     <div className="space-y-1">
-                      <div className="text-base font-bold text-slate-900">
-                        {item.word}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-base font-bold text-slate-900">
+                          {item.word}
+                        </span>
+                        {speechAvailable && (
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => handleSpeak(item)}
+                            aria-label={t.pronounceBtnAria(item.word)}
+                            className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
+                              speakingId === item.id
+                                ? 'bg-blue-600 text-white'
+                                : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                            }`}
+                          >
+                            <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        )}
                       </div>
                       {safeUrl && (
                         <a

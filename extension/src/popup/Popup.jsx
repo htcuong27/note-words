@@ -13,10 +13,21 @@ import {
   Save,
   Settings,
   Sparkles,
+  Volume2,
 } from 'lucide-react';
+import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 
-const DEFAULT_WEB_APP_URL = 'http://localhost:5173';
+const WEB_APP_URL = 'https://note-word.pages.dev';
 const DEFAULT_SHEET_LANG = 'English';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getTodayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 const I18N = {
   vi: {
@@ -51,8 +62,6 @@ const I18N = {
     gasHint: 'URL Web App đã deploy từ Google Apps Script',
     gasError: 'Vui lòng nhập URL hợp lệ bắt đầu bằng https://',
     gasRequired: 'Vui lòng nhập đường dẫn Google Apps Script.',
-    webUrlLabel: 'Link trang Web App ôn tập',
-    webUrlHintPrefix: 'Mặc định:',
     uiLangLabel: 'Ngôn ngữ hiển thị',
     saveBtn: 'Lưu cài đặt',
     savedSuccess: 'Đã lưu cài đặt thành công!',
@@ -61,6 +70,9 @@ const I18N = {
     fetchErr: (m) => `Không thể tải từ cần học: ${m}`,
     fetch404Hint:
       'HTTP 404 — Kiểm tra lại Link Google Apps Script trong Cài đặt (phải có dạng https://script.google.com/macros/s/.../exec và bản deploy vẫn đang hoạt động).',
+    pronounceAria: (w) => `Phát âm từ ${w}`,
+    cachedJustNow: 'Vừa cập nhật',
+    cachedMinutesAgo: (m) => `Cập nhật ${m} phút trước`,
   },
   en: {
     subtitle: 'Smart vocabulary capture & SRS',
@@ -94,8 +106,6 @@ const I18N = {
     gasHint: 'Deployed Web App URL from Google Apps Script',
     gasError: 'Please enter a valid URL starting with https://',
     gasRequired: 'Please enter your Google Apps Script URL.',
-    webUrlLabel: 'Review Web App Link',
-    webUrlHintPrefix: 'Default:',
     uiLangLabel: 'Display Language',
     saveBtn: 'Save Settings',
     savedSuccess: 'Settings saved successfully!',
@@ -104,6 +114,9 @@ const I18N = {
     fetchErr: (m) => `Could not load due words: ${m}`,
     fetch404Hint:
       'HTTP 404 — Check your Google Apps Script URL in Settings (must look like https://script.google.com/macros/s/.../exec and be an active deployment).',
+    pronounceAria: (w) => `Pronounce ${w}`,
+    cachedJustNow: 'Updated just now',
+    cachedMinutesAgo: (m) => `Updated ${m}m ago`,
   },
 };
 
@@ -123,14 +136,12 @@ async function loadSyncSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     return await chrome.storage.sync.get([
       'GAS_WEB_APP_URL',
-      'WEB_APP_URL',
       'NOTE_WORD_LANG',
       'UI_LANG',
     ]);
   }
   return {
     GAS_WEB_APP_URL: localStorage.getItem('GAS_WEB_APP_URL') || '',
-    WEB_APP_URL: localStorage.getItem('WEB_APP_URL') || '',
     NOTE_WORD_LANG: DEFAULT_SHEET_LANG,
     UI_LANG: localStorage.getItem('UI_LANG') || 'vi',
   };
@@ -143,9 +154,6 @@ async function saveSyncSettings(values) {
     if (values.GAS_WEB_APP_URL !== undefined) {
       localStorage.setItem('GAS_WEB_APP_URL', values.GAS_WEB_APP_URL);
     }
-    if (values.WEB_APP_URL !== undefined) {
-      localStorage.setItem('WEB_APP_URL', values.WEB_APP_URL);
-    }
     if (values.NOTE_WORD_LANG !== undefined) {
       localStorage.setItem('NOTE_WORD_LANG', values.NOTE_WORD_LANG);
     }
@@ -157,18 +165,54 @@ async function saveSyncSettings(values) {
 
 async function loadCachedDueWords() {
   if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-    const data = await chrome.storage.local.get(['CACHED_DUE_WORDS']);
-    return Array.isArray(data.CACHED_DUE_WORDS) ? data.CACHED_DUE_WORDS : null;
+    const data = await chrome.storage.local.get([
+      'CACHED_DUE_WORDS',
+      'CACHED_DUE_UPDATED_AT',
+      'CACHED_DUE_KEY',
+      'CACHED_DUE_DATE',
+    ]);
+    if (!Array.isArray(data.CACHED_DUE_WORDS)) return null;
+    return {
+      words: data.CACHED_DUE_WORDS,
+      updatedAt: Number(data.CACHED_DUE_UPDATED_AT) || 0,
+      key: String(data.CACHED_DUE_KEY || ''),
+      date: String(data.CACHED_DUE_DATE || ''),
+    };
   }
-  return null;
+  try {
+    const raw = localStorage.getItem('NOTEWORDS_DEV_DUE_CACHE');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.words)) return null;
+    return {
+      words: parsed.words,
+      updatedAt: Number(parsed.updatedAt) || 0,
+      key: String(parsed.key || ''),
+      date: String(parsed.date || ''),
+    };
+  } catch {
+    return null;
+  }
 }
 
-async function syncExtensionBadge(count, words) {
+async function syncExtensionBadge(count, words, cacheKey, todayStr) {
+  const updatedAt = Date.now();
   if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     await chrome.storage.local.set({
       CACHED_DUE_WORDS: words,
-      CACHED_DUE_UPDATED_AT: Date.now(),
+      CACHED_DUE_UPDATED_AT: updatedAt,
+      CACHED_DUE_KEY: cacheKey,
+      CACHED_DUE_DATE: todayStr,
     });
+  } else {
+    try {
+      localStorage.setItem(
+        'NOTEWORDS_DEV_DUE_CACHE',
+        JSON.stringify({ words, updatedAt, key: cacheKey, date: todayStr })
+      );
+    } catch {
+      // Ignore storage errors
+    }
   }
   if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
     try {
@@ -180,18 +224,27 @@ async function syncExtensionBadge(count, words) {
       // Ignore if background SW is unavailable in dev mode
     }
   }
+  return updatedAt;
+}
+
+function formatCacheTime(updatedAt, copy) {
+  if (!updatedAt) return '';
+  const diffMin = Math.floor((Date.now() - Number(updatedAt)) / 60000);
+  if (diffMin < 1) return copy.cachedJustNow;
+  return copy.cachedMinutesAgo(diffMin);
 }
 
 export default function Popup() {
   const [view, setView] = useState('words'); // 'words' | 'settings'
   const [uiLang, setUiLang] = useState('vi');
   const [gasUrl, setGasUrl] = useState('');
-  const [webAppUrl, setWebAppUrl] = useState('');
   const [sheetLang, setSheetLang] = useState(DEFAULT_SHEET_LANG);
 
   const [dueWords, setDueWords] = useState([]);
   const [loadingWords, setLoadingWords] = useState(false);
   const [wordsError, setWordsError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [speakingId, setSpeakingId] = useState(null);
   const [showMeanings, setShowMeanings] = useState(true);
   const [revealedIds, setRevealedIds] = useState(() => new Set());
 
@@ -201,17 +254,30 @@ export default function Popup() {
   const [loaded, setLoaded] = useState(false);
 
   const t = I18N[uiLang] || I18N.vi;
+  const speechAvailable = isSpeechSupported();
 
   useEffect(() => {
     document.documentElement.lang = uiLang;
   }, [uiLang]);
 
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
   const fetchDueWords = useCallback(
-    async (targetGasUrl, targetSheetLang = DEFAULT_SHEET_LANG, langKey = uiLang) => {
+    async (
+      targetGasUrl,
+      targetSheetLang = DEFAULT_SHEET_LANG,
+      langKey = uiLang,
+      { force = false } = {}
+    ) => {
       const cleanUrl = normalizeGasUrl(targetGasUrl);
       if (!cleanUrl) {
         setDueWords([]);
         setWordsError('');
+        setLastUpdatedAt(null);
         return;
       }
 
@@ -219,6 +285,24 @@ export default function Popup() {
       setWordsError('');
 
       try {
+        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+          const response = await chrome.runtime.sendMessage({
+            type: 'REFRESH_DUE_WORDS',
+            force,
+          });
+          if (!response || response.ok === false) {
+            if (response?.error === 'HTTP 404') {
+              const copy = I18N[langKey] || I18N.vi;
+              throw new Error(copy.fetch404Hint);
+            }
+            throw new Error(response?.error || 'Network error');
+          }
+          const list = Array.isArray(response.words) ? response.words : [];
+          setDueWords(list);
+          setLastUpdatedAt(response.updatedAt || Date.now());
+          return;
+        }
+
         const query = new URLSearchParams({
           action: 'getWords',
           lang: targetSheetLang || DEFAULT_SHEET_LANG,
@@ -245,8 +329,15 @@ export default function Popup() {
         }
 
         const list = Array.isArray(json.data) ? json.data : [];
+        const cacheKey = `${cleanUrl}::${targetSheetLang || DEFAULT_SHEET_LANG}`;
+        const updatedAt = await syncExtensionBadge(
+          list.length,
+          list,
+          cacheKey,
+          getTodayDateString()
+        );
         setDueWords(list);
-        await syncExtensionBadge(list.length, list);
+        setLastUpdatedAt(updatedAt);
       } catch (err) {
         const copy = I18N[langKey] || I18N.vi;
         setWordsError(copy.fetchErr(err?.message || 'Network error'));
@@ -268,23 +359,33 @@ export default function Popup() {
         if (!active) return;
 
         const savedUiLang = stored.UI_LANG === 'en' ? 'en' : 'vi';
-        const savedGas = String(stored.GAS_WEB_APP_URL || '').trim();
-        const savedWeb = String(stored.WEB_APP_URL || '').trim();
+        const savedGas = normalizeGasUrl(stored.GAS_WEB_APP_URL);
         const savedSheet =
           String(stored.NOTE_WORD_LANG || DEFAULT_SHEET_LANG).trim() ||
           DEFAULT_SHEET_LANG;
 
         setUiLang(savedUiLang);
         setGasUrl(savedGas);
-        setWebAppUrl(savedWeb);
         setSheetLang(savedSheet);
 
-        if (cached && savedGas) {
-          setDueWords(cached);
-        }
-
         if (savedGas) {
-          fetchDueWords(savedGas, savedSheet, savedUiLang);
+          const expectedKey = `${savedGas}::${savedSheet}`;
+          const todayStr = getTodayDateString();
+          const hasMatchingCache =
+            cached && cached.key === expectedKey && cached.date === todayStr;
+
+          if (hasMatchingCache) {
+            setDueWords(cached.words);
+            setLastUpdatedAt(cached.updatedAt || null);
+          }
+
+          const isFresh =
+            hasMatchingCache &&
+            Date.now() - Number(cached.updatedAt || 0) < CACHE_TTL_MS;
+
+          if (!isFresh) {
+            fetchDueWords(savedGas, savedSheet, savedUiLang, { force: false });
+          }
         }
       } catch (err) {
         if (active) {
@@ -299,6 +400,15 @@ export default function Popup() {
       active = false;
     };
   }, [fetchDueWords]);
+
+  const handleSpeak = (e, item) => {
+    e.stopPropagation();
+    speakWord(item.word, sheetLang, {
+      onStart: () => setSpeakingId(item.id),
+      onEnd: () => setSpeakingId((curr) => (curr === item.id ? null : curr)),
+      onError: () => setSpeakingId((curr) => (curr === item.id ? null : curr)),
+    });
+  };
 
   const handleChangeUiLang = async (nextLang) => {
     const normalized = nextLang === 'en' ? 'en' : 'vi';
@@ -324,7 +434,6 @@ export default function Popup() {
     setStatusMsg('');
 
     const trimmedGas = normalizeGasUrl(gasUrl);
-    const trimmedWeb = webAppUrl.trim();
 
     if (!trimmedGas) {
       setGasInvalid(true);
@@ -335,14 +444,12 @@ export default function Popup() {
     try {
       await saveSyncSettings({
         GAS_WEB_APP_URL: trimmedGas,
-        WEB_APP_URL: trimmedWeb,
         NOTE_WORD_LANG: sheetLang,
         UI_LANG: uiLang,
       });
       setGasUrl(trimmedGas);
-      setWebAppUrl(trimmedWeb);
       setStatusMsg(t.savedSuccess);
-      await fetchDueWords(trimmedGas, sheetLang, uiLang);
+      await fetchDueWords(trimmedGas, sheetLang, uiLang, { force: true });
       setTimeout(() => {
         setStatusMsg('');
         setView('words');
@@ -353,11 +460,10 @@ export default function Popup() {
   };
 
   const handleOpenWebApp = async () => {
-    const targetUrl = webAppUrl.trim() || DEFAULT_WEB_APP_URL;
     if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
-      await chrome.tabs.create({ url: targetUrl });
+      await chrome.tabs.create({ url: WEB_APP_URL });
     } else {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      window.open(WEB_APP_URL, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -447,19 +553,28 @@ export default function Popup() {
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
                   <BookOpen className="h-4 w-4" aria-hidden="true" />
                 </span>
-                <h2 className="text-sm font-bold text-slate-900">
-                  {t.wordsHeading}
-                </h2>
-                <span
-                  aria-label={t.dueCountAria(dueWords.length)}
-                  className={`nw-count-badge inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold ${
-                    dueWords.length > 0
-                      ? 'bg-blue-600 text-white shadow-2xs'
-                      : 'bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {dueWords.length}
-                </span>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-sm font-bold text-slate-900">
+                      {t.wordsHeading}
+                    </h2>
+                    <span
+                      aria-label={t.dueCountAria(dueWords.length)}
+                      className={`nw-count-badge inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold ${
+                        dueWords.length > 0
+                          ? 'bg-blue-600 text-white shadow-2xs'
+                          : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {dueWords.length}
+                    </span>
+                  </div>
+                  {lastUpdatedAt && (
+                    <p className="text-[10px] text-slate-400">
+                      {formatCacheTime(lastUpdatedAt, t)}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {isConfigured && (
@@ -482,7 +597,9 @@ export default function Popup() {
                   <button
                     type="button"
                     disabled={loadingWords}
-                    onClick={() => fetchDueWords(gasUrl, sheetLang, uiLang)}
+                    onClick={() =>
+                      fetchDueWords(gasUrl, sheetLang, uiLang, { force: true })
+                    }
                     aria-label={t.refreshAria}
                     title={t.refreshAria}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
@@ -536,7 +653,9 @@ export default function Popup() {
                 <div className="mt-3 flex items-center justify-center gap-2">
                   <button
                     type="button"
-                    onClick={() => fetchDueWords(gasUrl, sheetLang, uiLang)}
+                    onClick={() =>
+                      fetchDueWords(gasUrl, sheetLang, uiLang, { force: true })
+                    }
                     className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
                   >
                     <RefreshCw className="h-3 w-3" aria-hidden="true" />
@@ -572,15 +691,40 @@ export default function Popup() {
                   const rep = Number(item.repetition) || 0;
                   return (
                     <li key={item.id}>
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => toggleWordReveal(item.id)}
-                        className="w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xs transition-colors hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline-2 focus-visible:outline-blue-600"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleWordReveal(item.id);
+                          }
+                        }}
+                        className="w-full cursor-pointer rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xs transition-colors hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline-2 focus-visible:outline-blue-600"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="text-sm font-bold text-slate-900">
-                            {item.word}
-                          </span>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-sm font-bold text-slate-900">
+                              {item.word}
+                            </span>
+                            {speechAvailable && (
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => handleSpeak(e, item)}
+                                onKeyDown={(e) => e.stopPropagation()}
+                                aria-label={t.pronounceAria(item.word)}
+                                className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
+                                  speakingId === item.id
+                                    ? 'bg-blue-600 text-white'
+                                    : 'text-blue-600 hover:bg-blue-100 hover:text-blue-700'
+                                }`}
+                              >
+                                <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                            )}
+                          </div>
                           <span
                             className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                               rep === 0
@@ -613,7 +757,7 @@ export default function Popup() {
                             {item.context}
                           </p>
                         )}
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -709,35 +853,6 @@ export default function Popup() {
                   <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
                   <span>{t.gasError}</span>
                 </div>
-              </div>
-
-              {/* WEB_APP_URL */}
-              <div className="space-y-1">
-                <label
-                  htmlFor="web-app-url"
-                  className="block text-xs font-semibold text-slate-800"
-                >
-                  {t.webUrlLabel}
-                </label>
-                <p id="web-url-hint" className="text-[11px] text-slate-500">
-                  {t.webUrlHintPrefix}{' '}
-                  <code className="rounded bg-slate-100 px-1 text-slate-700">
-                    {DEFAULT_WEB_APP_URL}
-                  </code>
-                </p>
-                <input
-                  id="web-app-url"
-                  type="url"
-                  disabled={!loaded}
-                  value={webAppUrl}
-                  onChange={(e) => {
-                    setWebAppUrl(e.target.value);
-                    setStatusMsg('');
-                  }}
-                  aria-describedby="web-url-hint"
-                  placeholder={DEFAULT_WEB_APP_URL}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none disabled:opacity-60"
-                />
               </div>
 
               {/* Display Language Selector */}

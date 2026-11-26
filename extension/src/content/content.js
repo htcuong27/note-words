@@ -20,6 +20,7 @@
     vi: {
       saveBtn: '+ Lưu từ',
       saving: 'Đang lưu…',
+      speakTitle: 'Phát âm từ',
       connErr: (msg) => `Lỗi kết nối Extension: ${msg}`,
       noResp: 'Không nhận được phản hồi từ background.',
       duplicate: (w) => `Từ "${w}" đã tồn tại trong sổ từ.`,
@@ -32,6 +33,7 @@
     en: {
       saveBtn: '+ Save word',
       saving: 'Saving…',
+      speakTitle: 'Pronounce word',
       connErr: (msg) => `Extension connection error: ${msg}`,
       noResp: 'No response received from background service.',
       duplicate: (w) => `"${w}" is already in your vocabulary list.`,
@@ -45,15 +47,126 @@
 
   let shadowRoot = null;
   let hostEl = null;
+  let toolbarEl = null;
+  let speakBtn = null;
   let floatBtn = null;
   let toastEl = null;
   let toastTimer = null;
   let currentPayload = null;
   let isSaving = false;
   let uiLang = 'vi';
+  let activeUtterance = null;
+  let speakDelayTimer = null;
 
   function t() {
     return COPY[uiLang] || COPY.vi;
+  }
+
+  function isSpeechSupported() {
+    return (
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window &&
+      typeof SpeechSynthesisUtterance !== 'undefined'
+    );
+  }
+
+  function prewarmVoices() {
+    if (!isSpeechSupported()) return;
+    try {
+      window.speechSynthesis.getVoices();
+      if (typeof window.speechSynthesis.addEventListener === 'function') {
+        window.speechSynthesis.addEventListener(
+          'voiceschanged',
+          () => {
+            try {
+              window.speechSynthesis.getVoices();
+            } catch {
+              // Ignore voice loading errors
+            }
+          },
+          { once: true }
+        );
+      }
+    } catch {
+      // Ignore restricted page errors
+    }
+  }
+
+  prewarmVoices();
+
+  function pickLocalEnglishVoice() {
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return null;
+    const localVoices = voices.filter((v) => v.localService === true);
+    return (
+      localVoices.find(
+        (v) =>
+          v.lang &&
+          v.lang.toLowerCase().startsWith('en') &&
+          /samantha|ava|allison|nicky|alex|daniel|aaron|karen/i.test(
+            v.name || ''
+          )
+      ) ||
+      localVoices.find(
+        (v) => v.lang && v.lang.toLowerCase() === 'en-us'
+      ) ||
+      localVoices.find(
+        (v) => v.lang && v.lang.toLowerCase().startsWith('en')
+      ) ||
+      voices.find((v) => v.lang && v.lang.toLowerCase() === 'en-us') ||
+      voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('en')) ||
+      null
+    );
+  }
+
+  function speakSelectedWord(text) {
+    const cleaned = String(text || '').trim();
+    if (!cleaned || !isSpeechSupported()) return;
+    try {
+      if (speakDelayTimer !== null) {
+        clearTimeout(speakDelayTimer);
+        speakDelayTimer = null;
+      }
+
+      const synth = window.speechSynthesis;
+      const wasBusy = synth.speaking || synth.pending;
+      if (wasBusy) {
+        synth.cancel();
+      }
+
+      const utterance = new SpeechSynthesisUtterance(cleaned);
+      utterance.lang = 'en-US';
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+
+      const enVoice = pickLocalEnglishVoice();
+      if (enVoice) utterance.voice = enVoice;
+
+      activeUtterance = utterance;
+      utterance.onend = () => {
+        if (activeUtterance === utterance) activeUtterance = null;
+      };
+      utterance.onerror = () => {
+        if (activeUtterance === utterance) activeUtterance = null;
+      };
+
+      const runSpeak = () => {
+        if (synth.paused) synth.resume();
+        synth.speak(utterance);
+      };
+
+      if (wasBusy) {
+        speakDelayTimer = setTimeout(() => {
+          speakDelayTimer = null;
+          runSpeak();
+        }, 60);
+      } else {
+        runSpeak();
+      }
+    } catch {
+      // Ignore speech synthesis errors on restricted pages
+    }
   }
 
   async function syncUiLang() {
@@ -63,6 +176,10 @@
         uiLang = stored.UI_LANG === 'en' ? 'en' : 'vi';
         if (floatBtn && !isSaving) {
           floatBtn.textContent = t().saveBtn;
+        }
+        if (speakBtn) {
+          speakBtn.title = t().speakTitle;
+          speakBtn.setAttribute('aria-label', t().speakTitle);
         }
       }
     } catch {
@@ -78,6 +195,10 @@
         uiLang = changes.UI_LANG.newValue === 'en' ? 'en' : 'vi';
         if (floatBtn && !isSaving) {
           floatBtn.textContent = t().saveBtn;
+        }
+        if (speakBtn) {
+          speakBtn.title = t().speakTitle;
+          speakBtn.setAttribute('aria-label', t().speakTitle);
         }
       }
     });
@@ -104,12 +225,54 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
 
-      .nw-btn {
+      .nw-toolbar {
         position: fixed;
         display: none;
         align-items: center;
+        gap: 4px;
+        padding: 3px;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid #bfdbfe;
+        box-shadow: 0 8px 20px -4px rgba(37, 99, 235, 0.35);
+        pointer-events: auto;
+        user-select: none;
+      }
+
+      .nw-toolbar.visible {
+        display: inline-flex;
+      }
+
+      .nw-speak-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid #bfdbfe;
+        border-radius: 9999px;
+        background: #eff6ff;
+        color: #2563eb;
+        cursor: pointer;
+        transition: transform 0.12s ease, background 0.12s ease;
+      }
+
+      .nw-speak-btn:hover {
+        background: #dbeafe;
+        color: #1d4ed8;
+        transform: translateY(-1px);
+      }
+
+      .nw-speak-btn:active {
+        transform: scale(0.95);
+      }
+
+      .nw-btn {
+        display: inline-flex;
+        align-items: center;
         gap: 6px;
-        padding: 6px 13px;
+        padding: 5px 12px;
         border: 1px solid #1d4ed8;
         border-radius: 9999px;
         background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
@@ -118,8 +281,6 @@
         font-weight: 600;
         line-height: 1.2;
         cursor: pointer;
-        pointer-events: auto;
-        box-shadow: 0 8px 20px -4px rgba(37, 99, 235, 0.45);
         transition: transform 0.12s ease, background 0.12s ease, opacity 0.12s ease;
         user-select: none;
       }
@@ -136,10 +297,6 @@
       .nw-btn:disabled {
         opacity: 0.88;
         cursor: wait;
-      }
-
-      .nw-btn.visible {
-        display: inline-flex;
       }
 
       .nw-spinner {
@@ -197,6 +354,30 @@
       }
     `;
 
+    toolbarEl = document.createElement('div');
+    toolbarEl.className = 'nw-toolbar';
+
+    speakBtn = document.createElement('button');
+    speakBtn.type = 'button';
+    speakBtn.className = 'nw-speak-btn';
+    speakBtn.title = t().speakTitle;
+    speakBtn.setAttribute('aria-label', t().speakTitle);
+    speakBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>';
+
+    speakBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    speakBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (currentPayload?.word) {
+        speakSelectedWord(currentPayload.word);
+      }
+    });
+
     floatBtn = document.createElement('button');
     floatBtn.type = 'button';
     floatBtn.className = 'nw-btn';
@@ -219,8 +400,13 @@
     toastEl.setAttribute('role', 'status');
     toastEl.setAttribute('aria-live', 'polite');
 
+    if (isSpeechSupported()) {
+      toolbarEl.appendChild(speakBtn);
+    }
+    toolbarEl.appendChild(floatBtn);
+
     shadowRoot.appendChild(style);
-    shadowRoot.appendChild(floatBtn);
+    shadowRoot.appendChild(toolbarEl);
     shadowRoot.appendChild(toastEl);
 
     (document.documentElement || document.body).appendChild(hostEl);
@@ -240,8 +426,10 @@
   }
 
   function hideButton() {
+    if (toolbarEl) {
+      toolbarEl.classList.remove('visible');
+    }
     if (floatBtn) {
-      floatBtn.classList.remove('visible');
       floatBtn.disabled = false;
       floatBtn.textContent = t().saveBtn;
     }
@@ -325,8 +513,8 @@
 
   function positionButton(rect) {
     ensureShadowUI();
-    const btnWidth = 104;
-    const btnHeight = 32;
+    const btnWidth = isSpeechSupported() ? 144 : 112;
+    const btnHeight = 36;
     const margin = 8;
 
     let top = rect.top - btnHeight - margin;
@@ -340,9 +528,9 @@
     let left = rect.left + rect.width / 2 - btnWidth / 2;
     left = Math.max(margin, Math.min(left, window.innerWidth - btnWidth - margin));
 
-    floatBtn.style.top = `${Math.round(top)}px`;
-    floatBtn.style.left = `${Math.round(left)}px`;
-    floatBtn.classList.add('visible');
+    toolbarEl.style.top = `${Math.round(top)}px`;
+    toolbarEl.style.left = `${Math.round(left)}px`;
+    toolbarEl.classList.add('visible');
   }
 
   async function handleSaveClick() {

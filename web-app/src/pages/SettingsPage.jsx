@@ -63,6 +63,7 @@ export default function SettingsPage({
         url: trimmedUrl,
         lang: langInput,
         dueOnly: true,
+        forceRefresh: true,
       });
       setTestResult({
         ok: true,

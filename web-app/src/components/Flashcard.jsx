@@ -1,5 +1,7 @@
-import { ExternalLink, RotateCw, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ExternalLink, RotateCw, Sparkles, Volume2 } from 'lucide-react';
 import { getTranslations } from '../utils/i18n';
+import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -41,10 +43,36 @@ export function HighlightedContext({ context, word, uiLang = 'vi' }) {
   );
 }
 
-export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
+export default function Flashcard({
+  card,
+  isFlipped,
+  onFlip,
+  lang = 'English',
+  uiLang = 'vi',
+}) {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      setIsSpeaking(false);
+      stopSpeaking();
+    };
+  }, [card?.id]);
+
   if (!card) return null;
 
   const t = getTranslations(uiLang).flashcard;
+  const speechAvailable = isSpeechSupported();
+
+  const handleSpeak = (e) => {
+    e.stopPropagation();
+    e.currentTarget?.blur();
+    speakWord(card.word, lang, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+      onError: () => setIsSpeaking(false),
+    });
+  };
 
   const safeUrl =
     card.sourceUrl && /^https?:\/\//i.test(card.sourceUrl)
@@ -58,9 +86,15 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
         tabIndex={0}
         aria-pressed={isFlipped}
         aria-label={isFlipped ? t.flipFrontAria : t.flipBackAria}
-        onClick={onFlip}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          if (e.detail > 0) {
+            e.currentTarget.blur();
+          }
+          onFlip();
+        }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') {
+          if (e.key === 'Enter' && !isFlipped) {
             e.preventDefault();
             onFlip();
           }
@@ -72,7 +106,9 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
         {/* Front Face */}
         <section
           aria-hidden={isFlipped}
-          className="flashcard-face absolute inset-0 flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:border-blue-200 hover:shadow-md sm:p-8"
+          className={`flashcard-face absolute inset-0 flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:border-blue-200 hover:shadow-md sm:p-8 ${
+            isFlipped ? 'pointer-events-none' : ''
+          }`}
         >
           <div className="flex items-center justify-between text-xs font-medium text-slate-400">
             <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 font-semibold text-blue-700 ring-1 ring-inset ring-blue-200/70">
@@ -85,9 +121,30 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
           </div>
 
           <div className="my-auto py-6 text-center">
-            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-              {card.word}
-            </h2>
+            <div className="inline-flex items-center justify-center gap-2.5">
+              <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                {card.word}
+              </h2>
+              {speechAvailable && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleSpeak}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.stopPropagation();
+                  }}
+                  aria-label={t.pronounceAria(card.word)}
+                  title={t.pronounceTitle}
+                  className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+                    isSpeaking
+                      ? 'border-blue-500 bg-blue-600 text-white shadow-xs'
+                      : 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700'
+                  }`}
+                >
+                  <Volume2 className="h-4.5 w-4.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
             <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">
               “<HighlightedContext context={card.context} word={card.word} uiLang={uiLang} />”
             </p>
@@ -108,7 +165,9 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
         {/* Back Face */}
         <section
           aria-hidden={!isFlipped}
-          className="flashcard-face flashcard-face-back absolute inset-0 flex flex-col justify-between rounded-2xl border border-blue-200 bg-gradient-to-b from-white to-blue-50/50 p-6 shadow-sm sm:p-8"
+          className={`flashcard-face flashcard-face-back absolute inset-0 flex flex-col justify-between rounded-2xl border border-blue-200 bg-gradient-to-b from-white to-blue-50/50 p-6 shadow-sm sm:p-8 ${
+            !isFlipped ? 'pointer-events-none' : ''
+          }`}
         >
           <div className="flex items-center justify-between text-xs font-medium text-slate-400">
             <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2.5 py-1 font-semibold text-white">
@@ -121,9 +180,30 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
           </div>
 
           <div className="my-auto py-4 text-center">
-            <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-              {card.word}
-            </p>
+            <div className="inline-flex items-center justify-center gap-1.5">
+              <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
+                {card.word}
+              </p>
+              {speechAvailable && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleSpeak}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.stopPropagation();
+                  }}
+                  aria-label={t.pronounceAria(card.word)}
+                  title={t.pronounceTitle}
+                  className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+                    isSpeaking
+                      ? 'border-blue-500 bg-blue-600 text-white shadow-xs'
+                      : 'border-blue-200 bg-white text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
             <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
               {card.meaning || (
                 <span className="italic text-slate-400">{t.noMeaning}</span>
@@ -147,7 +227,11 @@ export default function Flashcard({ card, isFlipped, onFlip, uiLang = 'vi' }) {
                 href={safeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.blur();
+                }}
                 className="inline-flex max-w-full items-center gap-1.5 truncate font-medium text-blue-600 hover:text-blue-800 hover:underline"
               >
                 <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

@@ -20,6 +20,7 @@ export default function Navbar({
       <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => onNavigate('review')}
           className="flex items-center gap-2.5 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
         >
@@ -49,6 +50,7 @@ export default function Navbar({
                   <button
                     type="button"
                     aria-current={isCurrent ? 'page' : undefined}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => onNavigate(item.id)}
                     className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
                       isCurrent
@@ -72,6 +74,7 @@ export default function Navbar({
           >
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => onChangeUiLang('vi')}
               aria-pressed={uiLang === 'vi'}
               className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
@@ -84,6 +87,7 @@ export default function Navbar({
             </button>
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => onChangeUiLang('en')}
               aria-pressed={uiLang === 'en'}
               className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${

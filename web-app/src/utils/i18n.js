@@ -54,6 +54,24 @@ export const I18N = {
         'Hãy dùng Chrome Extension NoteWords để quét chọn và thêm từ mới vào Google Sheets.',
       reviewAllCta: 'Xem & ôn tất cả từ',
       checkAgain: 'Kiểm tra lại',
+      practicePassed: 'Đã điền từ chính xác! Chọn mức độ ghi nhớ bên dưới.',
+      practicePassedWithRetries: (n) =>
+        `Chính xác sau ${n} lần thử lại! Chọn mức độ ghi nhớ bên dưới.`,
+    },
+    fillPractice: {
+      badge: 'Vòng điền từ',
+      blanksCount: (b, t) => `Đang ẩn ${b}/${t} ký tự`,
+      wrongCount: (n) => `Sai ${n} lần`,
+      instruction: 'Điền các ký tự còn thiếu vào ô gạch chân bên dưới',
+      wrongFeedback: (b, t) =>
+        `Chưa chính xác! Đã đổi vị trí ngẫu nhiên và tăng lên ${b}/${t} ký tự ẩn.`,
+      checkBtn: 'Kiểm tra',
+      backToCardBtn: 'Xem lại thẻ',
+      inputAria: (pos, total) => `Ký tự cần điền ${pos} trên ${total}`,
+    },
+    cache: {
+      justNow: 'Đồng bộ vừa xong',
+      minutesAgo: (m) => `Đồng bộ ${m} phút trước`,
     },
     flashcard: {
       noContext: 'Chưa có câu ngữ cảnh cho từ này.',
@@ -67,10 +85,15 @@ export const I18N = {
       noMeaning: 'Chưa có nghĩa',
       noSource: 'Không có liên kết nguồn',
       spaceFlipBack: 'Nhấn Space để lật lại',
+      pronounceAria: (w) => `Phát âm từ ${w}`,
+      pronounceTitle: 'Phát âm (P)',
     },
     controls: {
       showAnswer: 'Hiển thị đáp án',
+      startPractice: 'Điền từ để ghi nhớ',
+      backFlipHint: 'Lật lại',
       shortcutsLabel: 'Phím tắt:',
+      pronounceLabel: 'Phát âm',
     },
     list: {
       title: 'Danh sách từ vựng',
@@ -112,6 +135,7 @@ export const I18N = {
       confirmDelete: 'Xóa hẳn',
       editBtnAria: (w) => `Sửa từ ${w}`,
       deleteBtnAria: (w) => `Xóa từ ${w}`,
+      pronounceBtnAria: (w) => `Phát âm từ ${w}`,
     },
     settings: {
       title: 'Cài đặt',
@@ -184,6 +208,24 @@ export const I18N = {
         'Use the NoteWords Chrome Extension to highlight and save words while browsing.',
       reviewAllCta: 'Browse & Review All',
       checkAgain: 'Check Again',
+      practicePassed: 'Word filled correctly! Choose your recall rating below.',
+      practicePassedWithRetries: (n) =>
+        `Correct after ${n} retries! Choose your recall rating below.`,
+    },
+    fillPractice: {
+      badge: 'Fill-in-the-blank',
+      blanksCount: (b, t) => `${b}/${t} letters hidden`,
+      wrongCount: (n) => `${n} wrong`,
+      instruction: 'Fill in the missing letters in the underlined blanks below',
+      wrongFeedback: (b, t) =>
+        `Not quite right! Randomized positions and increased to ${b}/${t} hidden letters.`,
+      checkBtn: 'Check Answer',
+      backToCardBtn: 'Review card',
+      inputAria: (pos, total) => `Missing letter ${pos} of ${total}`,
+    },
+    cache: {
+      justNow: 'Synced just now',
+      minutesAgo: (m) => `Synced ${m}m ago`,
     },
     flashcard: {
       noContext: 'No context sentence saved for this word.',
@@ -197,10 +239,15 @@ export const I18N = {
       noMeaning: 'No meaning yet',
       noSource: 'No source link',
       spaceFlipBack: 'Press Space to flip back',
+      pronounceAria: (w) => `Pronounce ${w}`,
+      pronounceTitle: 'Pronounce (P)',
     },
     controls: {
       showAnswer: 'Show Answer',
+      startPractice: 'Practice Spelling',
+      backFlipHint: 'Flip back',
       shortcutsLabel: 'Shortcuts:',
+      pronounceLabel: 'Pronounce',
     },
     list: {
       title: 'Vocabulary List',
@@ -242,6 +289,7 @@ export const I18N = {
       confirmDelete: 'Confirm Delete',
       editBtnAria: (w) => `Edit word ${w}`,
       deleteBtnAria: (w) => `Delete word ${w}`,
+      pronounceBtnAria: (w) => `Pronounce ${w}`,
     },
     settings: {
       title: 'Settings',
@@ -269,4 +317,12 @@ export const I18N = {
 
 export function getTranslations(uiLang) {
   return I18N[uiLang] || I18N.vi;
+}
+
+export function formatCacheAge(updatedAt, uiLang = 'vi') {
+  if (!updatedAt) return '';
+  const copy = getTranslations(uiLang).cache;
+  const diffMin = Math.floor((Date.now() - Number(updatedAt)) / 60000);
+  if (diffMin < 1) return copy.justNow;
+  return copy.minutesAgo(diffMin);
 }

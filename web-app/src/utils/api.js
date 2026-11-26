@@ -5,14 +5,118 @@
  * payload to avoid CORS preflight (OPTIONS) which GAS Web Apps do not handle.
  */
 
+import { isWordDue } from './sm2';
+
 export const STORAGE_KEYS = {
   GAS_URL: 'GAS_WEB_APP_URL',
   LANG: 'NOTE_WORD_LANG',
   UI_LANG: 'NOTE_WORD_UI_LANG',
+  WORDS_CACHE: 'NOTE_WORD_WORDS_CACHE_V1',
 };
+
+export const WORDS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const DEFAULT_LANG = 'English';
 export const DEFAULT_UI_LANG = 'vi';
+
+const inflightRequests = new Map();
+
+function normalizeApiUrl(url) {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    return parsed.toString();
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+function buildCacheKey(baseUrl, lang) {
+  return `${normalizeApiUrl(baseUrl)}::${lang}`;
+}
+
+function readAllWordsCache() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.WORDS_CACHE);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAllWordsCache(cacheMap) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.WORDS_CACHE, JSON.stringify(cacheMap));
+  } catch {
+    // Ignore storage quota or private browsing errors
+  }
+}
+
+function readWordsCache(cacheKey) {
+  const all = readAllWordsCache();
+  const entry = all[cacheKey];
+  if (!entry || !Array.isArray(entry.words)) return null;
+  const updatedAt = Number(entry.updatedAt) || 0;
+  const isFresh = Date.now() - updatedAt < WORDS_CACHE_TTL_MS;
+  return {
+    words: entry.words,
+    updatedAt,
+    isFresh,
+  };
+}
+
+function writeWordsCache(cacheKey, words) {
+  const all = readAllWordsCache();
+  all[cacheKey] = {
+    words: Array.isArray(words) ? words : [],
+    updatedAt: Date.now(),
+  };
+  writeAllWordsCache(all);
+}
+
+function mutateWordsCache(cacheKey, updater) {
+  const all = readAllWordsCache();
+  const entry = all[cacheKey];
+  if (!entry || !Array.isArray(entry.words)) return;
+  all[cacheKey] = {
+    words: updater(entry.words),
+    updatedAt: entry.updatedAt,
+  };
+  writeAllWordsCache(all);
+}
+
+export function getWordsCacheMeta({ lang = getCurrentLang(), url } = {}) {
+  const baseUrl = url !== undefined ? String(url).trim() : getApiUrl();
+  if (!baseUrl) return null;
+  const entry = readWordsCache(buildCacheKey(baseUrl, lang));
+  if (!entry) return null;
+  return {
+    updatedAt: entry.updatedAt,
+    isFresh: entry.isFresh,
+    count: entry.words.length,
+  };
+}
+
+export function patchCachedWord({ id, patch, lang = getCurrentLang(), url } = {}) {
+  const baseUrl = url !== undefined ? String(url).trim() : getApiUrl();
+  if (!baseUrl || !id || !patch) return;
+  const cacheKey = buildCacheKey(baseUrl, lang);
+  mutateWordsCache(cacheKey, (words) =>
+    words.map((item) => (item.id === id ? { ...item, ...patch } : item))
+  );
+}
+
+export function clearWordsCache() {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.WORDS_CACHE);
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export const SUPPORTED_LANGUAGES = [
   {
@@ -132,24 +236,53 @@ async function postGas(payload, overrideUrl) {
 }
 
 /**
- * Fetch words from Google Sheets.
- * @param {{ lang?: string, dueOnly?: boolean, url?: string }} options
+ * Fetch words from Google Sheets with localStorage TTL cache & in-flight deduplication.
+ * Always fetches and caches the full word list so switching modes/reloading avoids redundant calls.
+ * @param {{ lang?: string, dueOnly?: boolean, url?: string, forceRefresh?: boolean }} options
  */
-export async function getWords({ lang = getCurrentLang(), dueOnly = false, url } = {}) {
+export async function getWords({
+  lang = getCurrentLang(),
+  dueOnly = false,
+  url,
+  forceRefresh = false,
+} = {}) {
   const baseUrl = requireApiUrl(url);
-  const query = new URLSearchParams({
-    action: 'getWords',
-    lang,
-    dueOnly: dueOnly ? 'true' : 'false',
-  });
+  const cacheKey = buildCacheKey(baseUrl, lang);
 
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const response = await fetch(`${baseUrl}${separator}${query.toString()}`, {
-    method: 'GET',
-  });
+  if (!forceRefresh) {
+    const cached = readWordsCache(cacheKey);
+    if (cached?.isFresh) {
+      return dueOnly ? cached.words.filter((w) => isWordDue(w)) : cached.words;
+    }
+  }
 
-  const json = await parseGasResponse(response);
-  return Array.isArray(json.data) ? json.data : [];
+  let fetchPromise = inflightRequests.get(cacheKey);
+  if (!fetchPromise) {
+    const query = new URLSearchParams({
+      action: 'getWords',
+      lang,
+      dueOnly: 'false',
+    });
+
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    fetchPromise = fetch(`${baseUrl}${separator}${query.toString()}`, {
+      method: 'GET',
+    })
+      .then((response) => parseGasResponse(response))
+      .then((json) => {
+        const words = Array.isArray(json.data) ? json.data : [];
+        writeWordsCache(cacheKey, words);
+        return words;
+      })
+      .finally(() => {
+        inflightRequests.delete(cacheKey);
+      });
+
+    inflightRequests.set(cacheKey, fetchPromise);
+  }
+
+  const allWords = await fetchPromise;
+  return dueOnly ? allWords.filter((w) => isWordDue(w)) : allWords;
 }
 
 /**
@@ -162,14 +295,24 @@ export async function addWord({
   sourceUrl = '',
   lang = getCurrentLang(),
 }) {
-  const json = await postGas({
-    action: 'ADD_WORD',
-    lang,
-    word,
-    meaning,
-    context,
-    sourceUrl,
-  });
+  const baseUrl = requireApiUrl();
+  const json = await postGas(
+    {
+      action: 'ADD_WORD',
+      lang,
+      word,
+      meaning,
+      context,
+      sourceUrl,
+    },
+    baseUrl
+  );
+  if (json.data) {
+    const cacheKey = buildCacheKey(baseUrl, lang);
+    mutateWordsCache(cacheKey, (words) =>
+      words.some((item) => item.id === json.data.id) ? words : [...words, json.data]
+    );
+  }
   return json.data;
 }
 
@@ -186,17 +329,27 @@ export async function updateReview({
   quality,
   lang = getCurrentLang(),
 }) {
-  const json = await postGas({
-    action: 'UPDATE_REVIEW',
-    lang,
-    id,
-    repetition,
-    interval,
-    easeFactor,
-    nextReviewDate,
-    lastReviewedAt,
-    quality,
-  });
+  const baseUrl = requireApiUrl();
+  const json = await postGas(
+    {
+      action: 'UPDATE_REVIEW',
+      lang,
+      id,
+      repetition,
+      interval,
+      easeFactor,
+      nextReviewDate,
+      lastReviewedAt,
+      quality,
+    },
+    baseUrl
+  );
+  if (json.data) {
+    const cacheKey = buildCacheKey(baseUrl, lang);
+    mutateWordsCache(cacheKey, (words) =>
+      words.map((item) => (item.id === id ? { ...item, ...json.data } : item))
+    );
+  }
   return json.data;
 }
 
@@ -211,15 +364,25 @@ export async function editWord({
   sourceUrl,
   lang = getCurrentLang(),
 }) {
-  const json = await postGas({
-    action: 'EDIT_WORD',
-    lang,
-    id,
-    word,
-    meaning,
-    context,
-    sourceUrl,
-  });
+  const baseUrl = requireApiUrl();
+  const json = await postGas(
+    {
+      action: 'EDIT_WORD',
+      lang,
+      id,
+      word,
+      meaning,
+      context,
+      sourceUrl,
+    },
+    baseUrl
+  );
+  if (json.data) {
+    const cacheKey = buildCacheKey(baseUrl, lang);
+    mutateWordsCache(cacheKey, (words) =>
+      words.map((item) => (item.id === id ? { ...item, ...json.data } : item))
+    );
+  }
   return json.data;
 }
 
@@ -227,10 +390,17 @@ export async function editWord({
  * Delete a word by id.
  */
 export async function deleteWord({ id, lang = getCurrentLang() }) {
-  const json = await postGas({
-    action: 'DELETE_WORD',
-    lang,
-    id,
-  });
-  return json.deletedId || id;
+  const baseUrl = requireApiUrl();
+  const json = await postGas(
+    {
+      action: 'DELETE_WORD',
+      lang,
+      id,
+    },
+    baseUrl
+  );
+  const deletedId = json.deletedId || id;
+  const cacheKey = buildCacheKey(baseUrl, lang);
+  mutateWordsCache(cacheKey, (words) => words.filter((item) => item.id !== deletedId));
+  return deletedId;
 }

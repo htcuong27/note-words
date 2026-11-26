@@ -9,6 +9,27 @@
 const DEFAULT_SHEET_LANG = 'English';
 const ALARM_NAME = 'notewords-refresh-due-badge';
 const BADGE_BG_COLOR = '#2563eb';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_STORAGE_KEYS = [
+  'CACHED_DUE_WORDS',
+  'CACHED_DUE_UPDATED_AT',
+  'CACHED_DUE_KEY',
+  'CACHED_DUE_DATE',
+];
+
+let inflightDueSync = null;
+
+function getTodayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildCacheKey(gasUrl, sheetLang) {
+  return `${gasUrl}::${sheetLang}`;
+}
 
 function normalizeGasUrl(rawUrl) {
   const trimmed = String(rawUrl || '').trim();
@@ -32,7 +53,7 @@ async function applyBadgeCount(count) {
   await chrome.action.setBadgeText({ text });
 }
 
-async function fetchAndSyncDueWords() {
+async function fetchAndSyncDueWords({ force = false } = {}) {
   try {
     const stored = await chrome.storage.sync.get([
       'GAS_WEB_APP_URL',
@@ -44,48 +65,86 @@ async function fetchAndSyncDueWords() {
       DEFAULT_SHEET_LANG;
 
     if (!gasUrl) {
-      await chrome.storage.local.remove(['CACHED_DUE_WORDS', 'CACHED_DUE_UPDATED_AT']);
+      await chrome.storage.local.remove(CACHE_STORAGE_KEYS);
       await applyBadgeCount(0);
       return { ok: false, code: 'MISSING_URL', words: [] };
     }
 
-    const query = new URLSearchParams({
-      action: 'getWords',
-      lang: sheetLang,
-      dueOnly: 'true',
-    });
-    const separator = gasUrl.includes('?') ? '&' : '?';
-    const response = await fetch(`${gasUrl}${separator}${query.toString()}`, {
-      method: 'GET',
-      redirect: 'follow',
-      credentials: 'omit',
-    });
+    const cacheKey = buildCacheKey(gasUrl, sheetLang);
+    const todayStr = getTodayDateString();
 
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: `HTTP ${response.status}`,
-        words: [],
-      };
+    if (!force) {
+      const cached = await chrome.storage.local.get(CACHE_STORAGE_KEYS);
+      const updatedAt = Number(cached.CACHED_DUE_UPDATED_AT) || 0;
+      const isFresh =
+        cached.CACHED_DUE_KEY === cacheKey &&
+        cached.CACHED_DUE_DATE === todayStr &&
+        Array.isArray(cached.CACHED_DUE_WORDS) &&
+        Date.now() - updatedAt < CACHE_TTL_MS;
+
+      if (isFresh) {
+        await applyBadgeCount(cached.CACHED_DUE_WORDS.length);
+        return {
+          ok: true,
+          words: cached.CACHED_DUE_WORDS,
+          fromCache: true,
+          updatedAt,
+        };
+      }
     }
 
-    const json = await response.json();
-    if (!json || json.success === false) {
-      return {
-        ok: false,
-        error: json?.error || 'GAS request failed',
-        words: [],
-      };
+    if (inflightDueSync) {
+      return await inflightDueSync;
     }
 
-    const words = Array.isArray(json.data) ? json.data : [];
-    await chrome.storage.local.set({
-      CACHED_DUE_WORDS: words,
-      CACHED_DUE_UPDATED_AT: Date.now(),
-    });
-    await applyBadgeCount(words.length);
+    inflightDueSync = (async () => {
+      const query = new URLSearchParams({
+        action: 'getWords',
+        lang: sheetLang,
+        dueOnly: 'true',
+      });
+      const separator = gasUrl.includes('?') ? '&' : '?';
+      const response = await fetch(`${gasUrl}${separator}${query.toString()}`, {
+        method: 'GET',
+        redirect: 'follow',
+        credentials: 'omit',
+      });
 
-    return { ok: true, words };
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: `HTTP ${response.status}`,
+          words: [],
+        };
+      }
+
+      const json = await response.json();
+      if (!json || json.success === false) {
+        return {
+          ok: false,
+          error: json?.error || 'GAS request failed',
+          words: [],
+        };
+      }
+
+      const words = Array.isArray(json.data) ? json.data : [];
+      const updatedAt = Date.now();
+      await chrome.storage.local.set({
+        CACHED_DUE_WORDS: words,
+        CACHED_DUE_UPDATED_AT: updatedAt,
+        CACHED_DUE_KEY: cacheKey,
+        CACHED_DUE_DATE: todayStr,
+      });
+      await applyBadgeCount(words.length);
+
+      return { ok: true, words, fromCache: false, updatedAt };
+    })();
+
+    try {
+      return await inflightDueSync;
+    } finally {
+      inflightDueSync = null;
+    }
   } catch (err) {
     return {
       ok: false,
@@ -181,35 +240,60 @@ async function handleSaveWord(payload) {
     };
   }
 
-  // Refresh due words cache & badge in background after adding a word
-  await fetchAndSyncDueWords();
+  // Update due words cache directly when possible to avoid an extra GAS GET call
+  const savedItem = json ? json.data : null;
+  if (!json?.duplicate && savedItem) {
+    const cacheKey = buildCacheKey(gasUrl, lang);
+    const todayStr = getTodayDateString();
+    const cached = await chrome.storage.local.get(CACHE_STORAGE_KEYS);
+
+    if (
+      cached.CACHED_DUE_KEY === cacheKey &&
+      cached.CACHED_DUE_DATE === todayStr &&
+      Array.isArray(cached.CACHED_DUE_WORDS)
+    ) {
+      const exists = cached.CACHED_DUE_WORDS.some((w) => w.id === savedItem.id);
+      const nextWords = exists
+        ? cached.CACHED_DUE_WORDS
+        : [...cached.CACHED_DUE_WORDS, savedItem];
+      await chrome.storage.local.set({
+        CACHED_DUE_WORDS: nextWords,
+        CACHED_DUE_UPDATED_AT: Date.now(),
+      });
+      await applyBadgeCount(nextWords.length);
+    } else {
+      await fetchAndSyncDueWords({ force: true });
+    }
+  } else if (!json?.duplicate) {
+    await fetchAndSyncDueWords({ force: true });
+  }
 
   return {
     ok: true,
     duplicate: Boolean(json && json.duplicate),
-    data: json ? json.data : null,
+    data: savedItem,
   };
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 15 });
-  await fetchAndSyncDueWords();
+  await fetchAndSyncDueWords({ force: false });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 15 });
-  await fetchAndSyncDueWords();
+  await fetchAndSyncDueWords({ force: false });
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
-    await fetchAndSyncDueWords();
+    await fetchAndSyncDueWords({ force: true });
   }
 });
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName === 'sync' && (changes.GAS_WEB_APP_URL || changes.NOTE_WORD_LANG)) {
-    await fetchAndSyncDueWords();
+    await fetchAndSyncDueWords({ force: true });
   }
 });
 
@@ -235,7 +319,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'REFRESH_DUE_WORDS') {
     (async () => {
-      const result = await fetchAndSyncDueWords();
+      const result = await fetchAndSyncDueWords({
+        force: Boolean(message.force),
+      });
       sendResponse(result);
     })();
     return true;
