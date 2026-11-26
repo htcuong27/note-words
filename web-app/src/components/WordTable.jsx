@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check, ExternalLink, Loader2, Pencil, Trash2, Volume2, X } from 'lucide-react';
 import { HighlightedContext } from './Flashcard';
+import PhoneticBadge from './PhoneticBadge';
 import { isWordDue } from '../utils/sm2';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
@@ -13,7 +14,12 @@ export default function WordTable({
   uiLang = 'vi',
 }) {
   const [editingId, setEditingId] = useState(null);
-  const [draft, setDraft] = useState({ word: '', meaning: '', context: '' });
+  const [draft, setDraft] = useState({
+    word: '',
+    phonetic: '',
+    meaning: '',
+    context: '',
+  });
   const [savingId, setSavingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
@@ -41,6 +47,7 @@ export default function WordTable({
     setEditingId(item.id);
     setDraft({
       word: item.word || '',
+      phonetic: item.phonetic || '',
       meaning: item.meaning || '',
       context: item.context || '',
     });
@@ -48,7 +55,7 @@ export default function WordTable({
 
   const cancelEdit = () => {
     setEditingId(null);
-    setDraft({ word: '', meaning: '', context: '' });
+    setDraft({ word: '', phonetic: '', meaning: '', context: '' });
   };
 
   const submitEdit = async (id) => {
@@ -57,6 +64,7 @@ export default function WordTable({
       await onSaveEdit({
         id,
         word: draft.word.trim(),
+        phonetic: draft.phonetic.trim(),
         meaning: draft.meaning.trim(),
         context: draft.context.trim(),
       });
@@ -133,13 +141,25 @@ export default function WordTable({
                 {/* Sticky Row Header: Word */}
                 <th scope="row" className="px-4 py-3.5 font-semibold text-slate-900">
                   {isEditing ? (
-                    <input
-                      type="text"
-                      value={draft.word}
-                      onChange={(e) => setDraft((d) => ({ ...d, word: e.target.value }))}
-                      aria-label={t.editWordAria}
-                      className="w-full min-w-[120px] rounded-lg border border-blue-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none"
-                    />
+                    <div className="space-y-1.5">
+                      <input
+                        type="text"
+                        value={draft.word}
+                        onChange={(e) => setDraft((d) => ({ ...d, word: e.target.value }))}
+                        aria-label={t.editWordAria}
+                        className="w-full min-w-[120px] rounded-lg border border-blue-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={draft.phonetic}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, phonetic: e.target.value }))
+                        }
+                        aria-label={t.editPhoneticAria}
+                        placeholder={t.editPhoneticPlaceholder}
+                        className="w-full min-w-[120px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-normal text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none"
+                      />
+                    </div>
                   ) : (
                     <div className="space-y-1">
                       <div className="flex items-center gap-1.5">
@@ -161,6 +181,16 @@ export default function WordTable({
                             <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
                         )}
+                      </div>
+                      <div>
+                        <PhoneticBadge
+                          word={item.word}
+                          phonetic={item.phonetic}
+                          lang={lang}
+                          uiLang={uiLang}
+                          size="sm"
+                          className="justify-start"
+                        />
                       </div>
                       {safeUrl && (
                         <a

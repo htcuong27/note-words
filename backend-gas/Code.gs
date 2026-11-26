@@ -15,6 +15,7 @@
  *   I: easeFactor
  *   J: nextReviewDate
  *   K: lastReviewedAt
+ *   L: phonetic
  */
 
 const DEFAULT_LANG = "English";
@@ -31,6 +32,7 @@ const SHEET_HEADERS = [
   "easeFactor",
   "nextReviewDate",
   "lastReviewedAt",
+  "phonetic",
 ];
 
 const DEFAULT_SM2 = {
@@ -228,6 +230,13 @@ function handleAddWord(lang, payload) {
 
   const context = payload.context ? String(payload.context).trim() : "";
   const sourceUrl = payload.sourceUrl ? String(payload.sourceUrl).trim() : "";
+  let phonetic =
+    payload.phonetic !== undefined && payload.phonetic !== null
+      ? String(payload.phonetic).trim()
+      : "";
+  if (!phonetic) {
+    phonetic = fetchPhonetic(word, lang);
+  }
   const nowIso = new Date().toISOString();
   const todayStr = getTodayDateString();
 
@@ -245,6 +254,7 @@ function handleAddWord(lang, payload) {
       ? formatDateOnly(payload.nextReviewDate)
       : todayStr,
     lastReviewedAt: "",
+    phonetic: phonetic,
   };
 
   const sheet = getOrCreateSheet(lang);
@@ -323,6 +333,7 @@ function handleUpdateReview(lang, payload) {
     easeFactor: Math.round(easeFactor * 100) / 100,
     nextReviewDate: nextReviewDate,
     lastReviewedAt: lastReviewedAt,
+    phonetic: current.phonetic,
   };
 
   const range = sheet.getRange(match.rowIndex, 1, 1, SHEET_HEADERS.length);
@@ -382,6 +393,10 @@ function handleEditWord(lang, payload) {
     easeFactor: current.easeFactor,
     nextReviewDate: current.nextReviewDate,
     lastReviewedAt: current.lastReviewedAt,
+    phonetic:
+      payload.phonetic !== undefined
+        ? String(payload.phonetic).trim()
+        : current.phonetic,
   };
 
   sheet
@@ -434,6 +449,18 @@ function getOrCreateSheet(sheetName) {
     headerRange.setValues([SHEET_HEADERS]);
     headerRange.setFontWeight("bold");
     sheet.setFrozenRows(1);
+  } else {
+    // Auto-migrate older sheets missing newer trailing columns (e.g. `phonetic`)
+    const existingHeaders = sheet
+      .getRange(1, 1, 1, SHEET_HEADERS.length)
+      .getValues()[0];
+    for (let col = 0; col < SHEET_HEADERS.length; col++) {
+      if (!String(existingHeaders[col] || "").trim()) {
+        const cell = sheet.getRange(1, col + 1);
+        cell.setValue(SHEET_HEADERS[col]);
+        cell.setFontWeight("bold");
+      }
+    }
   }
 
   return sheet;
@@ -473,6 +500,65 @@ function translateWord(text, lang) {
     return LanguageApp.translate(text, langConfig.source, langConfig.target);
   } catch (err) {
     Logger.log('Translation failed for "' + text + '": ' + err.message);
+    return "";
+  }
+}
+
+/**
+ * Best-effort English IPA phonetic lookup via Datamuse API (CMUdict, always HTTP 200).
+ */
+function fetchPhonetic(text, lang) {
+  const normalizedLang = String(lang || DEFAULT_LANG).trim().toLowerCase();
+  if (normalizedLang !== "english" && normalizedLang !== "en") {
+    return "";
+  }
+
+  const cleaned = String(text || "")
+    .trim()
+    .replace(/^[.,!?;:"()[\]{}]+|[.,!?;:"()[\]{}]+$/g, "")
+    .toLowerCase();
+  if (!cleaned || !/^[a-z'-]+$/.test(cleaned)) {
+    return "";
+  }
+
+  try {
+    const url =
+      "https://api.datamuse.com/words?sp=" +
+      encodeURIComponent(cleaned) +
+      "&md=r&ipa=1&max=1";
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) {
+      return "";
+    }
+
+    const entries = JSON.parse(res.getContentText());
+    if (!Array.isArray(entries) || entries.length === 0) return "";
+
+    const exact = entries.find(function (item) {
+      return (
+        item &&
+        typeof item.word === "string" &&
+        item.word.toLowerCase() === cleaned
+      );
+    });
+    if (!exact || !Array.isArray(exact.tags)) return "";
+
+    const ipaTag = exact.tags.find(function (tag) {
+      return typeof tag === "string" && tag.indexOf("ipa_pron:") === 0;
+    });
+    if (!ipaTag) return "";
+
+    const ipa = ipaTag.slice("ipa_pron:".length).trim();
+    if (!ipa) return "";
+    if (
+      (ipa.charAt(0) === "/" && ipa.charAt(ipa.length - 1) === "/") ||
+      (ipa.charAt(0) === "[" && ipa.charAt(ipa.length - 1) === "]")
+    ) {
+      return ipa;
+    }
+    return "/" + ipa + "/";
+  } catch (err) {
+    Logger.log('Phonetic lookup failed for "' + text + '": ' + err.message);
     return "";
   }
 }
@@ -532,6 +618,7 @@ function rowToObject(row) {
         : DEFAULT_SM2.easeFactor,
     nextReviewDate: formatDateOnly(row[9]),
     lastReviewedAt: formatIsoOrString(row[10]),
+    phonetic: String(row[11] || ""),
   };
 }
 
@@ -548,6 +635,7 @@ function objectToRow(obj) {
     obj.easeFactor,
     obj.nextReviewDate,
     obj.lastReviewedAt,
+    obj.phonetic || "",
   ];
 }
 

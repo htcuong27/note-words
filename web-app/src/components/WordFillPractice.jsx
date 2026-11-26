@@ -7,6 +7,7 @@ import {
   Sparkles,
   Volume2,
 } from 'lucide-react';
+import PhoneticBadge from './PhoneticBadge';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 import { checkFillAnswer, getFillableIndices } from '../utils/wordFill';
@@ -428,6 +429,15 @@ export default function WordFillPractice({
                 {card.word}
               </strong>
             </p>
+            <div className="pt-0.5">
+              <PhoneticBadge
+                word={card.word}
+                phonetic={card.phonetic}
+                lang={lang}
+                uiLang={uiLang}
+                size="sm"
+              />
+            </div>
             <p className="text-xs text-rose-700">{t.requeueHint}</p>
           </div>
         )}

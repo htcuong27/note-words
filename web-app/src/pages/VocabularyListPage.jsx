@@ -73,18 +73,20 @@ export default function VocabularyListPage({
       if (!q) return true;
       return (
         String(item.word || '').toLowerCase().includes(q) ||
+        String(item.phonetic || '').toLowerCase().includes(q) ||
         String(item.meaning || '').toLowerCase().includes(q) ||
         String(item.context || '').toLowerCase().includes(q)
       );
     });
   }, [words, searchQuery, filterMode]);
 
-  const handleSaveEdit = async ({ id, word, meaning, context }) => {
+  const handleSaveEdit = async ({ id, word, phonetic, meaning, context }) => {
     setActionError('');
     try {
       const updated = await editWord({
         id,
         word,
+        phonetic,
         meaning,
         context,
         lang: currentLang,

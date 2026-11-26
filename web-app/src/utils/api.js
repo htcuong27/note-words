@@ -293,6 +293,7 @@ export async function addWord({
   meaning = '',
   context = '',
   sourceUrl = '',
+  phonetic = '',
   lang = getCurrentLang(),
 }) {
   const baseUrl = requireApiUrl();
@@ -304,6 +305,7 @@ export async function addWord({
       meaning,
       context,
       sourceUrl,
+      phonetic,
     },
     baseUrl
   );
@@ -362,6 +364,7 @@ export async function editWord({
   meaning,
   context,
   sourceUrl,
+  phonetic,
   lang = getCurrentLang(),
 }) {
   const baseUrl = requireApiUrl();
@@ -374,6 +377,7 @@ export async function editWord({
       meaning,
       context,
       sourceUrl,
+      phonetic,
     },
     baseUrl
   );

@@ -1,6 +1,9 @@
 /**
- * Web Speech API pronunciation helpers with Chrome/macOS race-condition fixes
- * and dictionary audio fallback (works offline via Web Speech API first).
+ * Pronunciation audio helpers:
+ * 1. Primary: Google Translate TTS audio (crisp, consistent volume from first play,
+ *    works for single words, inflections, phrases, and multiple languages).
+ * 2. Fallback: Local Web Speech API (offline / rate-limit fallback, with voice
+ *    readiness wait & AudioContext warm-up).
  */
 
 export const LANG_LOCALE_MAP = {
@@ -13,15 +16,28 @@ export const LANG_LOCALE_MAP = {
   Chinese: 'zh-CN',
 };
 
+const LANG_GOOGLE_TTS_MAP = {
+  English: 'en',
+  Japanese: 'ja',
+  Korean: 'ko',
+  French: 'fr',
+  German: 'de',
+  Spanish: 'es',
+  Chinese: 'zh-CN',
+};
+
+const GOOGLE_TTS_MAX_CHARS = 180;
+const GOOGLE_TTS_START_TIMEOUT_MS = 1600;
+const VOICES_WAIT_TIMEOUT_MS = 280;
+
 let voicesListenerAttached = false;
 let activeUtterance = null;
 let activeAudio = null;
+let audioContextRef = null;
 let speakDelayTimer = null;
 let startWatchdogTimer = null;
 let maxDurationTimer = null;
 let speakToken = 0;
-
-const audioUrlCache = new Map();
 
 function hasWebSpeech() {
   return (
@@ -40,6 +56,17 @@ export function isSpeechSupported() {
 
 function getPreferredLocale(lang = 'English') {
   return LANG_LOCALE_MAP[lang] || 'en-US';
+}
+
+function getGoogleTtsLang(lang = 'English') {
+  return LANG_GOOGLE_TTS_MAP[lang] || 'en';
+}
+
+function buildGoogleTtsUrl(text, lang = 'English') {
+  const tl = getGoogleTtsLang(lang);
+  return `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${encodeURIComponent(
+    tl
+  )}&q=${encodeURIComponent(text)}`;
 }
 
 function ensureVoicesPrewarmed() {
@@ -64,6 +91,55 @@ function ensureVoicesPrewarmed() {
 
 if (typeof window !== 'undefined') {
   ensureVoicesPrewarmed();
+}
+
+function warmUpAudioContext() {
+  if (typeof window === 'undefined') return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  try {
+    if (!audioContextRef) {
+      audioContextRef = new AudioCtx();
+    }
+    if (audioContextRef.state === 'suspended') {
+      audioContextRef.resume().catch(() => {});
+    }
+  } catch {
+    // Ignore AudioContext errors
+  }
+}
+
+function waitForVoices(timeoutMs = VOICES_WAIT_TIMEOUT_MS) {
+  if (!hasWebSpeech()) return Promise.resolve([]);
+  ensureVoicesPrewarmed();
+  const existing = window.speechSynthesis.getVoices();
+  if (existing && existing.length > 0) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (typeof window.speechSynthesis.removeEventListener === 'function') {
+        window.speechSynthesis.removeEventListener('voiceschanged', onVoices);
+      }
+      try {
+        resolve(window.speechSynthesis.getVoices() || []);
+      } catch {
+        resolve([]);
+      }
+    };
+    const onVoices = () => done();
+    const timer = setTimeout(done, timeoutMs);
+    if (typeof window.speechSynthesis.addEventListener === 'function') {
+      window.speechSynthesis.addEventListener('voiceschanged', onVoices, {
+        once: true,
+      });
+    }
+  });
 }
 
 function pickVoice(locale) {
@@ -129,6 +205,9 @@ function clearSpeakTimers() {
 function stopActiveAudio() {
   if (!activeAudio) return;
   try {
+    activeAudio.onplay = null;
+    activeAudio.onended = null;
+    activeAudio.onerror = null;
     activeAudio.pause();
     activeAudio.currentTime = 0;
   } catch {
@@ -137,139 +216,115 @@ function stopActiveAudio() {
   activeAudio = null;
 }
 
-async function resolveFallbackAudioUrl(word, locale) {
-  if (!locale.toLowerCase().startsWith('en')) return null;
-  if (!/^[a-zA-Z'-]+$/.test(word)) return null;
-
-  const key = word.toLowerCase();
-  if (audioUrlCache.has(key)) {
-    return audioUrlCache.get(key);
+function playGoogleTts(text, lang, token, { onStart, onEnd, onError } = {}) {
+  if (
+    typeof Audio === 'undefined' ||
+    token !== speakToken ||
+    text.length > GOOGLE_TTS_MAX_CHARS ||
+    (typeof navigator !== 'undefined' && navigator.onLine === false)
+  ) {
+    return Promise.resolve(false);
   }
 
-  try {
-    const res = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(key)}`
-    );
-    if (!res.ok) {
-      audioUrlCache.set(key, null);
-      return null;
-    }
-    const entries = await res.json();
-    let foundUrl = null;
-    if (Array.isArray(entries)) {
-      for (const entry of entries) {
-        const phonetics = Array.isArray(entry?.phonetics) ? entry.phonetics : [];
-        const match = phonetics.find(
-          (p) => typeof p?.audio === 'string' && p.audio.trim().length > 0
-        );
-        if (match) {
-          const raw = match.audio.trim();
-          foundUrl = raw.startsWith('//') ? `https:${raw}` : raw;
-          break;
+  const url = buildGoogleTtsUrl(text, lang);
+
+  return new Promise((resolve) => {
+    try {
+      stopActiveAudio();
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.volume = 1;
+      activeAudio = audio;
+
+      let started = false;
+      let finished = false;
+      let resolvedStart = false;
+
+      const clearStartTimer = () => {
+        if (startWatchdogTimer) {
+          clearTimeout(startWatchdogTimer);
+          startWatchdogTimer = null;
         }
+      };
+
+      const settleStart = (ok) => {
+        if (resolvedStart) return;
+        resolvedStart = true;
+        clearStartTimer();
+        resolve(ok);
+      };
+
+      const finish = (cb, arg) => {
+        if (finished) return;
+        finished = true;
+        clearStartTimer();
+        if (activeAudio === audio) {
+          activeAudio = null;
+        }
+        cb?.(arg);
+      };
+
+      audio.onplay = () => {
+        if (token !== speakToken) {
+          stopActiveAudio();
+          settleStart(false);
+          return;
+        }
+        started = true;
+        settleStart(true);
+        onStart?.();
+      };
+
+      audio.onended = () => {
+        finish(onEnd);
+      };
+
+      audio.onerror = (err) => {
+        if (!started) {
+          stopActiveAudio();
+          settleStart(false);
+        } else {
+          finish(onError, err);
+        }
+      };
+
+      startWatchdogTimer = setTimeout(() => {
+        if (!started && token === speakToken) {
+          stopActiveAudio();
+          settleStart(false);
+        }
+      }, GOOGLE_TTS_START_TIMEOUT_MS);
+
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          if (!started) {
+            stopActiveAudio();
+            settleStart(false);
+          }
+        });
       }
+    } catch {
+      stopActiveAudio();
+      resolve(false);
     }
-    audioUrlCache.set(key, foundUrl);
-    return foundUrl;
-  } catch {
-    return null;
-  }
+  });
 }
 
-async function playFallbackAudio(
-  word,
+async function speakWithWebSpeech(
+  cleaned,
   locale,
   token,
-  { onStart, onEnd, onError } = {}
+  { rate = 0.95, wasBusy = false, onStart, onEnd, onError } = {}
 ) {
-  if (typeof Audio === 'undefined') return false;
-  const url = await resolveFallbackAudioUrl(word, locale);
-  if (!url || token !== speakToken) return false;
-
-  try {
-    stopActiveAudio();
-    const audio = new Audio(url);
-    activeAudio = audio;
-
-    let done = false;
-    const finish = (cb, arg) => {
-      if (done) return;
-      done = true;
-      if (activeAudio === audio) {
-        activeAudio = null;
-      }
-      cb?.(arg);
-    };
-
-    audio.onplay = () => {
-      if (token !== speakToken) {
-        stopActiveAudio();
-        return;
-      }
-      onStart?.();
-    };
-    audio.onended = () => {
-      finish(onEnd);
-    };
-    audio.onerror = (err) => {
-      finish(onError, err);
-    };
-
-    await audio.play();
-    return true;
-  } catch (err) {
-    stopActiveAudio();
-    if (token === speakToken) {
-      onError?.(err);
-    }
-    return false;
-  }
-}
-
-export function stopSpeaking() {
-  speakToken += 1;
-  clearSpeakTimers();
-  stopActiveAudio();
-  activeUtterance = null;
-
-  if (!hasWebSpeech()) return;
-  try {
-    const synth = window.speechSynthesis;
-    if (synth.speaking || synth.pending) {
-      synth.cancel();
-    }
-  } catch {
-    // Ignore speech cancellation errors
-  }
-}
-
-export function speakWord(
-  text,
-  lang = 'English',
-  { rate = 0.95, onStart, onEnd, onError } = {}
-) {
-  const cleaned = String(text || '').trim();
-  if (!cleaned || !isSpeechSupported()) {
-    return false;
+  if (!hasWebSpeech() || token !== speakToken) {
+    if (token === speakToken) onError?.();
+    return;
   }
 
-  const locale = getPreferredLocale(lang);
-  const synth = hasWebSpeech() ? window.speechSynthesis : null;
-  const wasBusy = Boolean(synth && (synth.speaking || synth.pending));
-
-  stopSpeaking();
-  const token = speakToken;
-
-  if (!synth) {
-    playFallbackAudio(cleaned, locale, token, { onStart, onEnd, onError }).then(
-      (played) => {
-        if (!played && token === speakToken) {
-          onError?.();
-        }
-      }
-    );
-    return true;
-  }
+  const synth = window.speechSynthesis;
+  await waitForVoices();
+  if (token !== speakToken) return;
 
   try {
     const utterance = new SpeechSynthesisUtterance(cleaned);
@@ -327,17 +382,7 @@ export function speakWord(
         finish(onEnd);
         return;
       }
-      cleanupUtterance();
-      finished = true;
-      playFallbackAudio(cleaned, locale, token, {
-        onStart,
-        onEnd,
-        onError,
-      }).then((played) => {
-        if (!played && token === speakToken) {
-          onError?.(event);
-        }
-      });
+      finish(onError, event);
     };
 
     const runSpeak = () => {
@@ -357,25 +402,8 @@ export function speakWord(
           ) {
             return;
           }
-          finished = true;
-          cleanupUtterance();
-          try {
-            if (synth.speaking || synth.pending) {
-              synth.cancel();
-            }
-          } catch {
-            // Ignore cancel error
-          }
-          playFallbackAudio(cleaned, locale, token, {
-            onStart,
-            onEnd,
-            onError,
-          }).then((played) => {
-            if (!played && token === speakToken) {
-              onEnd?.();
-            }
-          });
-        }, 900);
+          finish(onEnd);
+        }, 1200);
       } catch (err) {
         finish(onError, err);
       }
@@ -386,10 +414,66 @@ export function speakWord(
     } else {
       runSpeak();
     }
-
-    return true;
   } catch (err) {
-    onError?.(err);
+    if (token === speakToken) {
+      onError?.(err);
+    }
+  }
+}
+
+export function stopSpeaking() {
+  speakToken += 1;
+  clearSpeakTimers();
+  stopActiveAudio();
+  activeUtterance = null;
+
+  if (!hasWebSpeech()) return;
+  try {
+    const synth = window.speechSynthesis;
+    if (synth.speaking || synth.pending) {
+      synth.cancel();
+    }
+  } catch {
+    // Ignore speech cancellation errors
+  }
+}
+
+export function speakWord(
+  text,
+  lang = 'English',
+  { rate = 0.95, onStart, onEnd, onError } = {}
+) {
+  const cleaned = String(text || '').trim();
+  if (!cleaned || !isSpeechSupported()) {
     return false;
   }
+
+  const locale = getPreferredLocale(lang);
+  const synth = hasWebSpeech() ? window.speechSynthesis : null;
+  const wasBusy = Boolean(synth && (synth.speaking || synth.pending));
+
+  warmUpAudioContext();
+  stopSpeaking();
+  const token = speakToken;
+
+  (async () => {
+    // 1. Primary: Google Translate TTS audio
+    const playedGoogle = await playGoogleTts(cleaned, lang, token, {
+      onStart,
+      onEnd,
+      onError,
+    });
+    if (playedGoogle || token !== speakToken) return;
+
+    // 2. Fallback: Local Web Speech API
+    await speakWithWebSpeech(cleaned, locale, token, {
+      rate,
+      wasBusy,
+      onStart,
+      onEnd,
+      onError,
+    });
+  })();
+
+  return true;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink, RotateCw, Sparkles, Volume2 } from 'lucide-react';
+import PhoneticBadge from './PhoneticBadge';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 
@@ -145,7 +146,16 @@ export default function Flashcard({
                 </button>
               )}
             </div>
-            <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">
+            <div className="mt-2 min-h-[24px]">
+              <PhoneticBadge
+                word={card.word}
+                phonetic={card.phonetic}
+                lang={lang}
+                uiLang={uiLang}
+                size="lg"
+              />
+            </div>
+            <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">
               “<HighlightedContext context={card.context} word={card.word} uiLang={uiLang} />”
             </p>
           </div>
@@ -203,6 +213,15 @@ export default function Flashcard({
                   <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               )}
+            </div>
+            <div className="mt-1">
+              <PhoneticBadge
+                word={card.word}
+                phonetic={card.phonetic}
+                lang={lang}
+                uiLang={uiLang}
+                size="sm"
+              />
             </div>
             <h2 className="mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
               {card.meaning || (

@@ -94,6 +94,12 @@ export const I18N = {
       pronounceAria: (w) => `Phát âm từ ${w}`,
       pronounceTitle: 'Phát âm (P)',
     },
+    phonetic: {
+      ipaTitle: 'Phiên âm IPA (ˈ trọng âm chính, ˌ trọng âm phụ)',
+      stressBadge: (n) => `Trọng âm ${n}`,
+      stressTitle: (n, total) =>
+        `Trọng âm chính rơi vào âm tiết thứ ${n} / ${total} âm tiết`,
+    },
     controls: {
       showAnswer: 'Hiển thị đáp án',
       startPractice: 'Điền từ để ghi nhớ',
@@ -130,6 +136,8 @@ export const I18N = {
       colNext: 'Ôn kế tiếp',
       colActions: 'Thao tác',
       editWordAria: 'Sửa từ vựng',
+      editPhoneticAria: 'Sửa phiên âm IPA',
+      editPhoneticPlaceholder: 'Phiên âm IPA (vd: /dɪˈvɛləpmənt/)…',
       source: 'Nguồn',
       editMeaningAria: 'Sửa nghĩa tiếng Việt',
       editMeaningPlaceholder: 'Nhập nghĩa tiếng Việt…',
@@ -255,6 +263,12 @@ export const I18N = {
       pronounceAria: (w) => `Pronounce ${w}`,
       pronounceTitle: 'Pronounce (P)',
     },
+    phonetic: {
+      ipaTitle: 'IPA pronunciation (ˈ primary stress, ˌ secondary stress)',
+      stressBadge: (n) => `Stress ${n}`,
+      stressTitle: (n, total) =>
+        `Primary stress on syllable ${n} of ${total}`,
+    },
     controls: {
       showAnswer: 'Show Answer',
       startPractice: 'Practice Spelling',
@@ -291,6 +305,8 @@ export const I18N = {
       colNext: 'Next Review',
       colActions: 'Actions',
       editWordAria: 'Edit word',
+      editPhoneticAria: 'Edit IPA phonetic',
+      editPhoneticPlaceholder: 'IPA phonetic (e.g. /dɪˈvɛləpmənt/)…',
       source: 'Source',
       editMeaningAria: 'Edit meaning',
       editMeaningPlaceholder: 'Enter meaning…',

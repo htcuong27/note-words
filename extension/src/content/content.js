@@ -119,7 +119,36 @@
     );
   }
 
-  function speakSelectedWord(text) {
+  function waitForVoices(timeoutMs = 280) {
+    const existing = window.speechSynthesis.getVoices();
+    if (existing && existing.length > 0) {
+      return Promise.resolve(existing);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (typeof window.speechSynthesis.removeEventListener === 'function') {
+          window.speechSynthesis.removeEventListener('voiceschanged', done);
+        }
+        try {
+          resolve(window.speechSynthesis.getVoices() || []);
+        } catch {
+          resolve([]);
+        }
+      };
+      const timer = setTimeout(done, timeoutMs);
+      if (typeof window.speechSynthesis.addEventListener === 'function') {
+        window.speechSynthesis.addEventListener('voiceschanged', done, {
+          once: true,
+        });
+      }
+    });
+  }
+
+  async function speakSelectedWord(text) {
     const cleaned = String(text || '').trim();
     if (!cleaned || !isSpeechSupported()) return;
     try {
@@ -133,6 +162,8 @@
       if (wasBusy) {
         synth.cancel();
       }
+
+      await waitForVoices();
 
       const utterance = new SpeechSynthesisUtterance(cleaned);
       utterance.lang = 'en-US';
@@ -560,10 +591,13 @@
         if (response.duplicate) {
           showToast(copy.duplicate(payloadToSend.word), 'warning');
         } else {
+          const phonetic = response.data?.phonetic
+            ? ` ${response.data.phonetic}`
+            : '';
           const meaning = response.data?.meaning
             ? ` → ${response.data.meaning}`
             : '';
-          showToast(copy.saved(payloadToSend.word, meaning), 'success');
+          showToast(copy.saved(payloadToSend.word, `${phonetic}${meaning}`), 'success');
         }
       } else if (response.code === 'MISSING_URL') {
         showToast(copy.missingUrl, 'warning');

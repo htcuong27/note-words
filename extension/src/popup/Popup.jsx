@@ -16,6 +16,13 @@ import {
   Volume2,
 } from 'lucide-react';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
+import {
+  analyzeIpaStress,
+  fetchPhonetic,
+  getCachedPhonetic,
+  normalizeIpaString,
+  tokenizeIpaForDisplay,
+} from '../utils/phonetics';
 
 const WEB_APP_URL = 'https://note-word.pages.dev';
 const DEFAULT_SHEET_LANG = 'English';
@@ -71,6 +78,7 @@ const I18N = {
     fetch404Hint:
       'HTTP 404 — Kiểm tra lại Link Google Apps Script trong Cài đặt (phải có dạng https://script.google.com/macros/s/.../exec và bản deploy vẫn đang hoạt động).',
     pronounceAria: (w) => `Phát âm từ ${w}`,
+    stressBadge: (n) => `Trọng âm ${n}`,
     cachedJustNow: 'Vừa cập nhật',
     cachedMinutesAgo: (m) => `Cập nhật ${m} phút trước`,
   },
@@ -115,6 +123,7 @@ const I18N = {
     fetch404Hint:
       'HTTP 404 — Check your Google Apps Script URL in Settings (must look like https://script.google.com/macros/s/.../exec and be an active deployment).',
     pronounceAria: (w) => `Pronounce ${w}`,
+    stressBadge: (n) => `Stress ${n}`,
     cachedJustNow: 'Updated just now',
     cachedMinutesAgo: (m) => `Updated ${m}m ago`,
   },
@@ -232,6 +241,69 @@ function formatCacheTime(updatedAt, copy) {
   const diffMin = Math.floor((Date.now() - Number(updatedAt)) / 60000);
   if (diffMin < 1) return copy.cachedJustNow;
   return copy.cachedMinutesAgo(diffMin);
+}
+
+function PopupPhonetic({ word, phonetic, lang, stressBadge }) {
+  const explicit = normalizeIpaString(phonetic);
+  const [ipa, setIpa] = useState(() => explicit || getCachedPhonetic(word, lang) || '');
+
+  useEffect(() => {
+    if (explicit) {
+      setIpa(explicit);
+      return;
+    }
+    const cached = getCachedPhonetic(word, lang);
+    if (cached !== undefined) {
+      setIpa(cached);
+      return;
+    }
+    setIpa('');
+    let cancelled = false;
+    fetchPhonetic(word, lang).then((res) => {
+      if (!cancelled) setIpa(res || '');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [word, explicit, lang]);
+
+  const activeIpa = explicit || ipa;
+  if (!activeIpa) return null;
+
+  const analysis = analyzeIpaStress(activeIpa);
+  const tokens = tokenizeIpaForDisplay(activeIpa);
+
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+      <span className="text-[11px] text-slate-500">
+        {tokens.map((tok, idx) => {
+          if (tok.type === 'primary') {
+            return (
+              <span
+                key={idx}
+                className="rounded bg-rose-50 px-0.5 font-bold text-rose-600"
+              >
+                {tok.text}
+              </span>
+            );
+          }
+          if (tok.type === 'secondary') {
+            return (
+              <span key={idx} className="font-semibold text-amber-600">
+                {tok.text}
+              </span>
+            );
+          }
+          return <span key={idx}>{tok.text}</span>;
+        })}
+      </span>
+      {analysis.primaryStressSyllable && (
+        <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-200/80">
+          {stressBadge(analysis.primaryStressSyllable)}
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function Popup() {
@@ -735,6 +807,13 @@ export default function Popup() {
                             {rep === 0 ? t.newBadge : t.repBadge(rep)}
                           </span>
                         </div>
+
+                        <PopupPhonetic
+                          word={item.word}
+                          phonetic={item.phonetic}
+                          lang={sheetLang}
+                          stressBadge={t.stressBadge}
+                        />
 
                         <div className="mt-1">
                           {isRevealed ? (
