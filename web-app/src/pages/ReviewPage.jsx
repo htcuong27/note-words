@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AlertCircle,
-  CheckCircle2,
-  CloudUpload,
-  Loader2,
-  RefreshCw,
-  RotateCcw,
-} from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import Flashcard from '../components/Flashcard';
 import ReviewControls from '../components/ReviewControls';
 import WordFillPractice from '../components/WordFillPractice';
+import ReviewToolbar from '../components/review/ReviewToolbar';
+import ReviewProgress from '../components/review/ReviewProgress';
+import {
+  ReviewDoneState,
+  ReviewErrorState,
+  ReviewLoadingState,
+  ReviewNoApiState,
+  ReviewNotices,
+} from '../components/review/ReviewStatusStates';
+import { useReviewShortcuts } from '../hooks/useReviewShortcuts';
 import {
   getWords,
   getWordsCacheMeta,
@@ -17,7 +20,7 @@ import {
   updateReview,
 } from '../utils/api';
 import { RATING, calculateSM2 } from '../utils/sm2';
-import { formatCacheAge, getTranslations } from '../utils/i18n';
+import { getTranslations } from '../utils/i18n';
 import { speakWord, stopSpeaking } from '../utils/speech';
 import {
   getFillableIndices,
@@ -151,7 +154,10 @@ export default function ReviewPage({
     if (currentCard?.word) {
       speakWord(currentCard.word, currentLang);
     }
-    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+    if (
+      document.activeElement &&
+      typeof document.activeElement.blur === 'function'
+    ) {
       document.activeElement.blur();
     }
     setPracticePassed(true);
@@ -232,85 +238,15 @@ export default function ReviewPage({
     [currentCard, currentLang, resetCardPractice, t]
   );
 
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (!currentCard || loading) return;
-
-      const isPKey = e.code === 'KeyP' || e.key.toLowerCase() === 'p';
-
-      // Alt+P works everywhere (including inside WordFillPractice inputs)
-      if (isPKey && e.altKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        speakWord(currentCard.word, currentLang);
-        return;
-      }
-
-      const tag = e.target?.tagName?.toLowerCase();
-      if (
-        tag === 'input' ||
-        tag === 'textarea' ||
-        tag === 'select' ||
-        e.target?.isContentEditable
-      ) {
-        return;
-      }
-
-      if (e.code === 'Space' && stage !== 'practice') {
-        e.preventDefault();
-        const active = document.activeElement;
-        const activeTag = active?.tagName?.toLowerCase();
-        if (activeTag === 'button' || activeTag === 'a') {
-          active.blur?.();
-        }
-        handleFlip();
-        return;
-      }
-
-      if (e.key === 'Enter' && stage === 'back') {
-        e.preventDefault();
-        const active = document.activeElement;
-        const activeTag = active?.tagName?.toLowerCase();
-        if (activeTag === 'button' || activeTag === 'a') {
-          active.blur?.();
-        }
-        startPractice();
-        return;
-      }
-
-      if (isPKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        speakWord(currentCard.word, currentLang);
-        return;
-      }
-
-      if (stage === 'rate') {
-        if (e.key === '1') {
-          e.preventDefault();
-          handleRate(RATING.AGAIN);
-        } else if (e.key === '2') {
-          e.preventDefault();
-          handleRate(RATING.HARD);
-        } else if (e.key === '3') {
-          e.preventDefault();
-          handleRate(RATING.GOOD);
-        } else if (e.key === '4') {
-          e.preventDefault();
-          handleRate(RATING.EASY);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
+  useReviewShortcuts({
     currentCard,
     currentLang,
     loading,
     stage,
-    handleFlip,
-    startPractice,
-    handleRate,
-  ]);
+    onFlip: handleFlip,
+    onStartPractice: startPractice,
+    onRate: handleRate,
+  });
 
   const completedUnique = Math.max(0, totalInitial - queue.length);
   const progressPercent =
@@ -320,159 +256,40 @@ export default function ReviewPage({
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
-      {/* Top Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-            {t.title}
-          </h1>
-          <p className="text-sm text-slate-500">
-            {t.sheetPrefix}{' '}
-            <span className="font-semibold text-blue-700">{currentLang}</span> ·{' '}
-            {dueOnly ? t.modeDue : t.modeAll}
-            {lastSyncedAt ? ` · ${formatCacheAge(lastSyncedAt, uiLang)}` : ''}
-          </p>
-        </div>
+      <ReviewToolbar
+        t={t}
+        currentLang={currentLang}
+        uiLang={uiLang}
+        dueOnly={dueOnly}
+        lastSyncedAt={lastSyncedAt}
+        loading={loading}
+        apiUrl={apiUrl}
+        onChangeDueOnly={setDueOnly}
+        onReload={() => loadCards(dueOnly, { forceRefresh: true })}
+      />
 
-        <div className="flex items-center gap-2">
-          <div
-            role="group"
-            aria-label={t.filterGroupAria}
-            className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5 shadow-2xs"
-          >
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setDueOnly(true)}
-              aria-pressed={dueOnly}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
-                dueOnly
-                  ? 'bg-blue-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {t.dueBtn}
-            </button>
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setDueOnly(false)}
-              aria-pressed={!dueOnly}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
-                !dueOnly
-                  ? 'bg-blue-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {t.allBtn}
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => loadCards(dueOnly, { forceRefresh: true })}
-            disabled={loading || !apiUrl}
-            aria-label={t.reloadAria}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-blue-600' : ''}`}
-              aria-hidden="true"
-            />
-            {t.reloadBtn}
-          </button>
-        </div>
-      </div>
-
-      {/* Progress & Sync Status */}
       {apiUrl && !loading && totalInitial > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>
-              {t.remainingPrefix}{' '}
-              <strong className="text-slate-800">{queue.length}</strong>{' '}
-              {t.remainingUnit} · {t.answeredPrefix}{' '}
-              <strong className="text-slate-800">{reviewedCount}</strong>{' '}
-              {t.answeredUnit}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              {pendingSyncs > 0 ? (
-                <>
-                  <CloudUpload
-                    className="h-3.5 w-3.5 animate-pulse text-blue-600"
-                    aria-hidden="true"
-                  />
-                  <span className="font-medium text-blue-600">
-                    {t.syncing(pendingSyncs)}
-                  </span>
-                </>
-              ) : (
-                <span>{t.completedPct(progressPercent)}</span>
-              )}
-            </span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-blue-100">
-            <div
-              className="h-full rounded-full bg-blue-600 transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </div>
+        <ReviewProgress
+          t={t}
+          remainingCount={queue.length}
+          reviewedCount={reviewedCount}
+          pendingSyncs={pendingSyncs}
+          progressPercent={progressPercent}
+        />
       )}
 
-      {/* Notices */}
-      {requeuedWord && (
-        <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2.5 text-xs font-medium text-blue-900">
-          <RotateCcw className="h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
-          <span>{t.requeuedNotice(requeuedWord)}</span>
-        </div>
-      )}
+      <ReviewNotices requeuedWord={requeuedWord} syncError={syncError} t={t} />
 
-      {syncError && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800"
-        >
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>{syncError}</span>
-        </div>
-      )}
-
-      {/* Main Content Area */}
       {!apiUrl ? (
-        <div className="rounded-2xl border border-dashed border-blue-200 bg-white p-10 text-center">
-          <p className="text-sm font-medium text-slate-700">{t.noApiPrompt}</p>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="mt-4 inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-          >
-            {t.openSettings}
-          </button>
-        </div>
+        <ReviewNoApiState t={t} onOpenSettings={onOpenSettings} />
       ) : loading ? (
-        <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 text-slate-500">
-          <Loader2 className="h-7 w-7 animate-spin text-blue-600" aria-hidden="true" />
-          <p className="mt-3 text-sm font-medium">{t.loadingCards}</p>
-        </div>
+        <ReviewLoadingState t={t} />
       ) : error ? (
-        <div
-          role="alert"
-          className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center"
-        >
-          <AlertCircle className="mx-auto h-8 w-8 text-rose-500" aria-hidden="true" />
-          <p className="mt-2 text-sm font-semibold text-rose-900">{error}</p>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => loadCards(dueOnly, { forceRefresh: true })}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            {t.retry}
-          </button>
-        </div>
+        <ReviewErrorState
+          error={error}
+          t={t}
+          onRetry={() => loadCards(dueOnly, { forceRefresh: true })}
+        />
       ) : currentCard ? (
         <div className="space-y-5">
           {stage === 'practice' ? (
@@ -524,43 +341,13 @@ export default function ReviewPage({
           )}
         </div>
       ) : (
-        <div className="rounded-2xl border border-blue-200 bg-white p-10 text-center shadow-xs">
-          <CheckCircle2
-            className="mx-auto h-12 w-12 text-blue-600"
-            aria-hidden="true"
-          />
-          <h2 className="mt-3 text-lg font-bold text-slate-900">
-            {totalInitial > 0
-              ? t.doneSession
-              : dueOnly
-                ? t.emptyDue
-                : t.emptySheet}
-          </h2>
-          <p className="mt-1.5 text-sm text-slate-500">
-            {dueOnly ? t.dueHint : t.emptyHint}
-          </p>
-          <div className="mt-5 flex flex-wrap justify-center gap-2.5">
-            {dueOnly && (
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setDueOnly(false)}
-                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-blue-700"
-              >
-                {t.reviewAllCta}
-              </button>
-            )}
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => loadCards(dueOnly, { forceRefresh: true })}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              {t.checkAgain}
-            </button>
-          </div>
-        </div>
+        <ReviewDoneState
+          totalInitial={totalInitial}
+          dueOnly={dueOnly}
+          t={t}
+          onReviewAll={() => setDueOnly(false)}
+          onCheckAgain={() => loadCards(dueOnly, { forceRefresh: true })}
+        />
       )}
     </div>
   );

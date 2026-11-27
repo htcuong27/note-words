@@ -1,47 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Check,
   Sparkles,
   Volume2,
 } from 'lucide-react';
-import PhoneticBadge from './PhoneticBadge';
+import MaskedContext from './wordFill/MaskedContext';
+import WordBlankInputs from './wordFill/WordBlankInputs';
+import WrongAnswerFeedback from './wordFill/WrongAnswerFeedback';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 import { checkFillAnswer, getFillableIndices } from '../utils/wordFill';
-
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function MaskedContext({ context, word }) {
-  if (!context) return null;
-  const trimmedWord = String(word || '').trim();
-  if (!trimmedWord) return <span>{context}</span>;
-
-  const regex = new RegExp(`(${escapeRegExp(trimmedWord)})`, 'gi');
-  const parts = String(context).split(regex);
-
-  return (
-    <>
-      {parts.map((part, idx) =>
-        part.toLowerCase() === trimmedWord.toLowerCase() ? (
-          <span
-            key={idx}
-            aria-hidden="true"
-            className="mx-0.5 inline-block rounded bg-blue-100/80 px-2 py-0.5 font-mono text-xs font-semibold tracking-widest text-blue-700"
-          >
-            _____
-          </span>
-        ) : (
-          <span key={idx}>{part}</span>
-        )
-      )}
-    </>
-  );
-}
 
 export default function WordFillPractice({
   card,
@@ -72,34 +42,11 @@ export default function WordFillPractice({
   const controlsT = getTranslations(uiLang).controls;
   const speechAvailable = isSpeechSupported();
 
-  const chars = useMemo(() => Array.from(String(card?.word || '')), [card?.word]);
   const totalFillable = useMemo(
     () => getFillableIndices(card?.word).length,
     [card?.word]
   );
   const blankSet = useMemo(() => new Set(blankIndices), [blankIndices]);
-
-  const tokenGroups = useMemo(() => {
-    const groups = [];
-    let currentWordTokens = [];
-
-    chars.forEach((ch, idx) => {
-      if (/\s/.test(ch)) {
-        if (currentWordTokens.length > 0) {
-          groups.push({ type: 'word', items: currentWordTokens });
-          currentWordTokens = [];
-        }
-        groups.push({ type: 'space', index: idx, char: ch });
-      } else {
-        currentWordTokens.push({ index: idx, char: ch });
-      }
-    });
-
-    if (currentWordTokens.length > 0) {
-      groups.push({ type: 'word', items: currentWordTokens });
-    }
-    return groups;
-  }, [chars]);
 
   useEffect(() => {
     setInputs({});
@@ -346,100 +293,28 @@ export default function WordFillPractice({
 
       {/* Underlined Letter Blanks Form */}
       <form onSubmit={handleSubmit} className="mt-4 space-y-5">
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-5">
-          {tokenGroups.map((group, groupIdx) => {
-            if (group.type === 'space') {
-              return (
-                <span key={`space-${group.index}-${groupIdx}`} className="w-1" />
-              );
-            }
-
-            return (
-              <div
-                key={`word-${groupIdx}`}
-                className="inline-flex flex-wrap items-baseline justify-center gap-1"
-              >
-                {group.items.map(({ index, char }) => {
-                  if (!blankSet.has(index)) {
-                    return (
-                      <span
-                        key={index}
-                        className="inline-flex h-10 min-w-[14px] items-center justify-center font-mono text-xl font-bold text-slate-800 sm:text-2xl"
-                      >
-                        {char}
-                      </span>
-                    );
-                  }
-
-                  const blankPos = blankIndices.indexOf(index);
-                  return (
-                    <input
-                      key={index}
-                      ref={(el) => {
-                        if (el) {
-                          inputRefs.current[index] = el;
-                        } else {
-                          delete inputRefs.current[index];
-                        }
-                      }}
-                      type="text"
-                      maxLength={1}
-                      value={inputs[index] || ''}
-                      disabled={isFailed}
-                      onFocus={() => {
-                        lastFocusedBlankIdxRef.current = index;
-                      }}
-                      onChange={(e) =>
-                        handleInputChange(index, blankPos, e.target.value)
-                      }
-                      onKeyDown={(e) => handleInputKeyDown(e, index, blankPos)}
-                      onPaste={(e) => handlePaste(e, blankPos)}
-                      aria-label={t.inputAria(blankPos + 1, blankIndices.length)}
-                      autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="none"
-                      spellCheck={false}
-                      className={`h-10 w-8 border-b-2 bg-transparent text-center font-mono text-xl font-bold transition-colors focus:outline-none sm:w-9 sm:text-2xl ${
-                        isFailed
-                          ? wrongIndexSet.has(index)
-                            ? 'border-rose-500 text-rose-700'
-                            : 'border-emerald-500 text-emerald-700'
-                          : 'border-blue-500 text-blue-700 focus:border-blue-700'
-                      }`}
-                    />
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
+        <WordBlankInputs
+          word={card.word}
+          blankIndices={blankIndices}
+          blankSet={blankSet}
+          inputs={inputs}
+          isFailed={isFailed}
+          wrongIndexSet={wrongIndexSet}
+          inputRefs={inputRefs}
+          lastFocusedBlankIdxRef={lastFocusedBlankIdxRef}
+          inputAria={t.inputAria}
+          onInputChange={handleInputChange}
+          onInputKeyDown={handleInputKeyDown}
+          onPaste={handlePaste}
+        />
 
         {isFailed && (
-          <div
-            role="alert"
-            className="space-y-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm text-rose-900"
-          >
-            <div className="flex items-center justify-center gap-1.5 font-semibold text-rose-800">
-              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{t.wrongAnswerTitle}</span>
-            </div>
-            <p className="text-sm text-rose-800">
-              {t.correctAnswerLabel}{' '}
-              <strong className="rounded bg-white px-2 py-0.5 font-mono text-base font-bold text-slate-900 ring-1 ring-rose-200">
-                {card.word}
-              </strong>
-            </p>
-            <div className="pt-0.5">
-              <PhoneticBadge
-                word={card.word}
-                phonetic={card.phonetic}
-                lang={lang}
-                uiLang={uiLang}
-                size="sm"
-              />
-            </div>
-            <p className="text-xs text-rose-700">{t.requeueHint}</p>
-          </div>
+          <WrongAnswerFeedback
+            card={card}
+            lang={lang}
+            uiLang={uiLang}
+            t={t}
+          />
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2.5">

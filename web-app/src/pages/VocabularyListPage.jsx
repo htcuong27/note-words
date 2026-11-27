@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AlertCircle, Loader2, RefreshCw, Search } from 'lucide-react';
 import WordTable from '../components/WordTable';
 import {
@@ -29,6 +36,9 @@ export default function VocabularyListPage({
   const t = getTranslations(uiLang).list;
   const loadErrRef = useRef(t.loadErr);
   loadErrRef.current = t.loadErr;
+  const wordsRef = useRef(words);
+  wordsRef.current = words;
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const loadAllWords = useCallback(
     async ({ forceRefresh = false } = {}) => {
@@ -69,7 +79,7 @@ export default function VocabularyListPage({
   );
 
   const filteredWords = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = deferredSearchQuery.trim().toLowerCase();
     return words.filter((item) => {
       if (filterMode === 'due' && !isWordDue(item)) {
         return false;
@@ -82,49 +92,55 @@ export default function VocabularyListPage({
         String(item.context || '').toLowerCase().includes(q)
       );
     });
-  }, [words, searchQuery, filterMode]);
+  }, [words, deferredSearchQuery, filterMode]);
 
-  const handleSaveEdit = async ({ id, word, phonetic, meaning, context }) => {
-    setActionError('');
-    const cleanedWord = cleanWordText(word);
-    const targetKey = normalizeWordKey(cleanedWord);
-    const hasDuplicate = words.some(
-      (item) => item.id !== id && normalizeWordKey(item.word) === targetKey
-    );
-    if (hasDuplicate) {
-      const msg = t.duplicateErr(cleanedWord);
-      setActionError(msg);
-      throw new Error(msg);
-    }
-
-    try {
-      const updated = await editWord({
-        id,
-        word: cleanedWord,
-        phonetic,
-        meaning,
-        context,
-        lang: currentLang,
-      });
-      setWords((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, ...updated } : item))
+  const handleSaveEdit = useCallback(
+    async ({ id, word, phonetic, meaning, context }) => {
+      setActionError('');
+      const cleanedWord = cleanWordText(word);
+      const targetKey = normalizeWordKey(cleanedWord);
+      const hasDuplicate = wordsRef.current.some(
+        (item) => item.id !== id && normalizeWordKey(item.word) === targetKey
       );
-    } catch (err) {
-      setActionError(t.editErr(err.message));
-      throw err;
-    }
-  };
+      if (hasDuplicate) {
+        const msg = t.duplicateErr(cleanedWord);
+        setActionError(msg);
+        throw new Error(msg);
+      }
 
-  const handleDelete = async (id) => {
-    setActionError('');
-    try {
-      await deleteWord({ id, lang: currentLang });
-      setWords((prev) => prev.filter((item) => item.id !== id));
-    } catch (err) {
-      setActionError(t.deleteErr(err.message));
-      throw err;
-    }
-  };
+      try {
+        const updated = await editWord({
+          id,
+          word: cleanedWord,
+          phonetic,
+          meaning,
+          context,
+          lang: currentLang,
+        });
+        setWords((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, ...updated } : item))
+        );
+      } catch (err) {
+        setActionError(t.editErr(err.message));
+        throw err;
+      }
+    },
+    [currentLang, t]
+  );
+
+  const handleDelete = useCallback(
+    async (id) => {
+      setActionError('');
+      try {
+        await deleteWord({ id, lang: currentLang });
+        setWords((prev) => prev.filter((item) => item.id !== id));
+      } catch (err) {
+        setActionError(t.deleteErr(err.message));
+        throw err;
+      }
+    },
+    [currentLang, t]
+  );
 
   return (
     <div className="space-y-5">

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import Navbar from './components/Navbar';
 import ReviewPage from './pages/ReviewPage';
-import VocabularyListPage from './pages/VocabularyListPage';
-import SettingsPage from './pages/SettingsPage';
+
+const VocabularyListPage = lazy(() => import('./pages/VocabularyListPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 import {
   getApiUrl,
   getCurrentLang,
@@ -83,24 +84,35 @@ export default function App() {
           />
         )}
 
-        {activePage === 'list' && (
-          <VocabularyListPage
-            apiUrl={apiUrl}
-            currentLang={currentLang}
-            uiLang={uiLang}
-            onOpenSettings={() => setActivePage('settings')}
-          />
-        )}
+        <Suspense
+          fallback={
+            <div className="flex min-h-[240px] items-center justify-center rounded-2xl border border-slate-200 bg-white">
+              <Loader2
+                className="h-7 w-7 animate-spin text-blue-600"
+                aria-hidden="true"
+              />
+            </div>
+          }
+        >
+          {activePage === 'list' && (
+            <VocabularyListPage
+              apiUrl={apiUrl}
+              currentLang={currentLang}
+              uiLang={uiLang}
+              onOpenSettings={() => setActivePage('settings')}
+            />
+          )}
 
-        {activePage === 'settings' && (
-          <SettingsPage
-            apiUrl={apiUrl}
-            currentLang={currentLang}
-            uiLang={uiLang}
-            onChangeUiLang={handleChangeUiLang}
-            onSaveSettings={handleSaveSettings}
-          />
-        )}
+          {activePage === 'settings' && (
+            <SettingsPage
+              apiUrl={apiUrl}
+              currentLang={currentLang}
+              uiLang={uiLang}
+              onChangeUiLang={handleChangeUiLang}
+              onSaveSettings={handleSaveSettings}
+            />
+          )}
+        </Suspense>
       </main>
     </div>
   );

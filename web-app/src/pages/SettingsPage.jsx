@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -24,6 +24,15 @@ export default function SettingsPage({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const urlInputRef = useRef(null);
+  const savedNoticeTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (savedNoticeTimerRef.current !== null) {
+        clearTimeout(savedNoticeTimerRef.current);
+      }
+    };
+  }, []);
 
   const t = getTranslations(uiLang).settings;
 
@@ -43,7 +52,13 @@ export default function SettingsPage({
 
     onSaveSettings({ url: trimmedUrl, lang: langInput, uiLanguage: uiLang });
     setSavedNotice(true);
-    setTimeout(() => setSavedNotice(false), 3500);
+    if (savedNoticeTimerRef.current !== null) {
+      clearTimeout(savedNoticeTimerRef.current);
+    }
+    savedNoticeTimerRef.current = setTimeout(() => {
+      savedNoticeTimerRef.current = null;
+      setSavedNotice(false);
+    }, 3500);
   };
 
   const handleTestConnection = async () => {

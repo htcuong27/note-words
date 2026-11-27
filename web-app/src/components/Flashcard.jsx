@@ -3,10 +3,7 @@ import { ExternalLink, RotateCw, Sparkles, Volume2 } from 'lucide-react';
 import PhoneticBadge from './PhoneticBadge';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
-
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp } from '../utils/text';
 
 /**
  * Highlight occurrences of `word` inside `context` (case-insensitive).
