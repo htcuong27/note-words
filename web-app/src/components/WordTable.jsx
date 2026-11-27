@@ -4,8 +4,12 @@ import { cleanWordText } from '../utils/api';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
 
-const INITIAL_VISIBLE_ROWS = 60;
-const ROWS_CHUNK_SIZE = 60;
+const VIRTUAL_OVERSCAN = 4;
+const ESTIMATED_ROW_DESKTOP = 76;
+const ESTIMATED_ROW_MOBILE = 220;
+const ESTIMATED_ROW_EDIT = 148;
+const MOBILE_BREAKPOINT = 680;
+const DEFAULT_VIEWPORT_HEIGHT = 640;
 
 const EMPTY_DRAFT = {
   word: '',
@@ -13,6 +17,20 @@ const EMPTY_DRAFT = {
   meaning: '',
   context: '',
 };
+
+function findFirstIndexAfter(offsets, count, target) {
+  let low = 0;
+  let high = count;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (offsets[mid + 1] <= target) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
 
 export default function WordTable({
   words,
@@ -27,10 +45,21 @@ export default function WordTable({
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [speakingId, setSpeakingId] = useState(null);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
+
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT_HEIGHT);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [measureVersion, setMeasureVersion] = useState(0);
 
   const wrapperRef = useRef(null);
-  const sentinelRef = useRef(null);
+  const theadRef = useRef(null);
+  const measuredHeightsRef = useRef(new Map());
+  const nodeToKeyRef = useRef(new Map());
+  const idToNodeRef = useRef(new Map());
+  const rowObserverRef = useRef(null);
+  const scrollRafRef = useRef(null);
+  const latestScrollTopRef = useRef(0);
+  const lastWidthRef = useRef(0);
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
@@ -40,45 +69,165 @@ export default function WordTable({
   useEffect(() => {
     return () => {
       stopSpeaking();
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
     };
   }, []);
 
-  // Reset progressive window when list changes while user is scrolled at the top
+  // Observe wrapper size to track viewport height & mobile/desktop container breakpoint
   useEffect(() => {
-    if (!wrapperRef.current || wrapperRef.current.scrollTop === 0) {
-      setVisibleCount(INITIAL_VISIBLE_ROWS);
-    }
-  }, [words]);
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
 
-  const hasMoreRows = visibleCount < words.length;
-  const visibleWords = useMemo(
-    () => (hasMoreRows ? words.slice(0, visibleCount) : words),
-    [words, visibleCount, hasMoreRows]
-  );
+    const updateSize = () => {
+      const nextHeight = wrapper.clientHeight || DEFAULT_VIEWPORT_HEIGHT;
+      const nextWidth = wrapper.clientWidth || 0;
+      setViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+      setIsMobileLayout(nextWidth > 0 && nextWidth < MOBILE_BREAKPOINT);
 
+      if (lastWidthRef.current > 0 && Math.abs(lastWidthRef.current - nextWidth) > 24) {
+        measuredHeightsRef.current.clear();
+        setMeasureVersion((v) => v + 1);
+      }
+      lastWidthRef.current = nextWidth;
+    };
+
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(wrapper);
+    return () => ro.disconnect();
+  }, [words.length === 0]);
+
+  // Observe mounted table rows to keep dynamic height cache accurate
   useEffect(() => {
-    if (!hasMoreRows) return;
-    const sentinel = sentinelRef.current;
-    const root = wrapperRef.current;
-    if (!sentinel || typeof IntersectionObserver === 'undefined') {
-      setVisibleCount(words.length);
-      return;
-    }
+    if (typeof ResizeObserver === 'undefined') return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((prev) =>
-            Math.min(words.length, prev + ROWS_CHUNK_SIZE)
-          );
+    const ro = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const key =
+          entry.target.dataset?.nwMeasureKey ||
+          nodeToKeyRef.current.get(entry.target);
+        if (!key) continue;
+        const nextHeight = Math.ceil(
+          entry.target.getBoundingClientRect().height ||
+            entry.contentRect.height
+        );
+        if (nextHeight <= 0) continue;
+        const prevHeight = measuredHeightsRef.current.get(key);
+        if (prevHeight === undefined || Math.abs(prevHeight - nextHeight) >= 1) {
+          measuredHeightsRef.current.set(key, nextHeight);
+          changed = true;
         }
-      },
-      { root, rootMargin: '250px 0px' }
-    );
+      }
+      if (changed) {
+        setMeasureVersion((v) => v + 1);
+      }
+    });
 
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMoreRows, words.length]);
+    rowObserverRef.current = ro;
+    for (const el of nodeToKeyRef.current.keys()) {
+      ro.observe(el);
+    }
+
+    return () => {
+      ro.disconnect();
+      rowObserverRef.current = null;
+    };
+  }, []);
+
+  const registerRowRef = useCallback((id, measureKey, el) => {
+    const prevEl = idToNodeRef.current.get(id);
+    if (prevEl && prevEl !== el) {
+      rowObserverRef.current?.unobserve(prevEl);
+      nodeToKeyRef.current.delete(prevEl);
+      idToNodeRef.current.delete(id);
+    }
+
+    if (el) {
+      el.dataset.nwMeasureKey = measureKey;
+      idToNodeRef.current.set(id, el);
+      nodeToKeyRef.current.set(el, measureKey);
+      rowObserverRef.current?.observe(el);
+      const measured = Math.ceil(el.getBoundingClientRect().height);
+      if (measured > 0) {
+        const prevHeight = measuredHeightsRef.current.get(measureKey);
+        if (prevHeight === undefined || Math.abs(prevHeight - measured) >= 1) {
+          measuredHeightsRef.current.set(measureKey, measured);
+          setMeasureVersion((v) => v + 1);
+        }
+      }
+    }
+  }, []);
+
+  const handleScroll = useCallback((e) => {
+    latestScrollTopRef.current = e.currentTarget.scrollTop;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollTop(latestScrollTopRef.current);
+    });
+  }, []);
+
+  // Reset scroll to top if list shrinks below current scroll position
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    if (wrapper.scrollTop > 0 && words.length === 0) {
+      wrapper.scrollTop = 0;
+      setScrollTop(0);
+    }
+  }, [words.length]);
+
+  const { offsets, totalHeight } = useMemo(() => {
+    const count = words.length;
+    const pos = new Float64Array(count + 1);
+    const defaultRowHeight = isMobileLayout
+      ? ESTIMATED_ROW_MOBILE
+      : ESTIMATED_ROW_DESKTOP;
+    // Matches `margin-block-end: 0.875rem` (14px) on stacked mobile cards in index.css
+    const rowGap = isMobileLayout ? 14 : 0;
+    let y = 0;
+    for (let i = 0; i < count; i += 1) {
+      pos[i] = y;
+      const item = words[i];
+      const isEditing = editingId === item.id;
+      const measureKey = `${item.id}:${isEditing ? 1 : 0}`;
+      const fallback = isEditing ? ESTIMATED_ROW_EDIT : defaultRowHeight;
+      const h = measuredHeightsRef.current.get(measureKey) ?? fallback;
+      y += h + (i < count - 1 ? rowGap : 0);
+    }
+    pos[count] = y;
+    return { offsets: pos, totalHeight: y };
+    // measureVersion intentionally invalidates prefix sums after ResizeObserver updates
+  }, [words, editingId, isMobileLayout, measureVersion]);
+
+  const count = words.length;
+  const headerHeight = isMobileLayout ? 0 : theadRef.current?.offsetHeight || 41;
+  const bodyScrollTop = Math.max(0, scrollTop - headerHeight);
+  const clampedScrollTop = Math.min(
+    bodyScrollTop,
+    Math.max(0, totalHeight - viewportHeight)
+  );
+  const rawStart = findFirstIndexAfter(offsets, count, clampedScrollTop);
+  const rawEnd = findFirstIndexAfter(
+    offsets,
+    count,
+    clampedScrollTop + viewportHeight
+  );
+  const startIdx = Math.max(0, rawStart - VIRTUAL_OVERSCAN);
+  const endIdx = Math.min(count, rawEnd + 1 + VIRTUAL_OVERSCAN);
+
+  const visibleWords = useMemo(
+    () => words.slice(startIdx, endIdx),
+    [words, startIdx, endIdx]
+  );
+  const topSpacerHeight = offsets[startIdx] || 0;
+  const bottomSpacerHeight = Math.max(0, totalHeight - (offsets[endIdx] || 0));
 
   const handleSpeak = useCallback(
     (item) => {
@@ -164,6 +313,7 @@ export default function WordTable({
   return (
     <div
       ref={wrapperRef}
+      onScroll={handleScroll}
       tabIndex={0}
       role="region"
       aria-labelledby="word-table-caption"
@@ -173,35 +323,49 @@ export default function WordTable({
         <caption id="word-table-caption" className="sr-only">
           {t.caption}
         </caption>
-        <thead className="bg-blue-50/60 text-xs font-semibold uppercase tracking-wide text-blue-900/75">
+        <thead
+          ref={theadRef}
+          className="bg-blue-50/60 text-xs font-semibold uppercase tracking-wide text-blue-900/75"
+        >
           <tr>
-            <th scope="col" className="border-b border-blue-100 px-4 py-3">
+            <th scope="col" className="word-col-word border-b border-blue-100 px-4 py-3">
               {t.colWord}
             </th>
-            <th scope="col" className="border-b border-blue-100 px-4 py-3">
+            <th scope="col" className="word-col-meaning border-b border-blue-100 px-4 py-3">
               {t.colMeaning}
             </th>
-            <th scope="col" className="border-b border-blue-100 px-4 py-3">
+            <th scope="col" className="word-col-context border-b border-blue-100 px-4 py-3">
               {t.colContext}
             </th>
-            <th scope="col" className="border-b border-blue-100 px-4 py-3">
+            <th scope="col" className="word-col-next border-b border-blue-100 px-4 py-3">
               {t.colNext}
             </th>
             <th
               scope="col"
-              className="border-b border-blue-100 px-4 py-3 text-right"
+              className="word-col-actions border-b border-blue-100 px-4 py-3 text-right"
             >
               {t.colActions}
             </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
+          {topSpacerHeight > 0 && (
+            <tr aria-hidden="true" className="word-table-spacer">
+              <td
+                colSpan={5}
+                style={{ height: topSpacerHeight, padding: 0, border: 0 }}
+              />
+            </tr>
+          )}
           {visibleWords.map((item) => {
             const isEditing = editingId === item.id;
+            const measureKey = `${item.id}:${isEditing ? 1 : 0}`;
             return (
               <WordTableRow
                 key={item.id}
                 item={item}
+                measureKey={measureKey}
+                rowRef={registerRowRef}
                 isEditing={isEditing}
                 draft={isEditing ? draft : null}
                 isSaving={savingId === item.id}
@@ -223,11 +387,16 @@ export default function WordTable({
               />
             );
           })}
+          {bottomSpacerHeight > 0 && (
+            <tr aria-hidden="true" className="word-table-spacer">
+              <td
+                colSpan={5}
+                style={{ height: bottomSpacerHeight, padding: 0, border: 0 }}
+              />
+            </tr>
+          )}
         </tbody>
       </table>
-      {hasMoreRows && (
-        <div ref={sentinelRef} className="h-4 w-full" aria-hidden="true" />
-      )}
     </div>
   );
 }

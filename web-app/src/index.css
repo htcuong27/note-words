@@ -59,6 +59,40 @@
   z-index: 2;
 }
 
+.word-table .word-col-word {
+  width: 22%;
+  min-width: 165px;
+}
+
+.word-table .word-col-meaning {
+  width: 22%;
+  min-width: 150px;
+}
+
+.word-table .word-col-context {
+  width: 34%;
+}
+
+.word-table .word-col-next {
+  width: 13%;
+  min-width: 128px;
+}
+
+.word-table .word-col-actions {
+  width: 9%;
+  min-width: 88px;
+}
+
+.word-table tr.word-table-spacer,
+.word-table tr.word-table-spacer td {
+  border: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  pointer-events: none;
+}
+
 .word-table tbody th {
   position: sticky;
   inset-inline-start: 0;

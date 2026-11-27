@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 import {
   Check,
   ExternalLink,
@@ -14,6 +14,8 @@ import { isWordDue } from '../utils/sm2';
 
 const WordTableRow = memo(function WordTableRow({
   item,
+  measureKey,
+  rowRef,
   isEditing,
   draft,
   isSaving,
@@ -38,9 +40,19 @@ const WordTableRow = memo(function WordTableRow({
     item.sourceUrl && /^https?:\/\//i.test(item.sourceUrl)
       ? item.sourceUrl
       : '';
+  const trRef = useCallback(
+    (el) => {
+      rowRef?.(item.id, measureKey, el);
+    },
+    [rowRef, item.id, measureKey]
+  );
 
   return (
-    <tr className="align-top transition-colors hover:bg-blue-50/30">
+    <tr
+      ref={rowRef ? trRef : undefined}
+      data-nw-measure-key={measureKey}
+      className="align-top transition-colors hover:bg-blue-50/30"
+    >
       {/* Sticky Row Header: Word */}
       <th scope="row" className="px-4 py-3.5 font-semibold text-slate-900">
         {isEditing ? (
