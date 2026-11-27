@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -26,7 +26,12 @@ import {
 
 const WEB_APP_URL = 'https://note-word.pages.dev';
 const DEFAULT_SHEET_LANG = 'English';
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
+const VIRTUAL_VIEWPORT_HEIGHT = 280;
+const VIRTUAL_ITEM_GAP = 8;
+const VIRTUAL_OVERSCAN = 2;
+const VIRTUAL_ESTIMATED_EXPANDED = 92;
+const VIRTUAL_ESTIMATED_COLLAPSED = 70;
 
 function getTodayDateString() {
   const now = new Date();
@@ -259,11 +264,15 @@ function PopupPhonetic({ word, phonetic, lang, stressBadge }) {
     }
     setIpa('');
     let cancelled = false;
-    fetchPhonetic(word, lang).then((res) => {
-      if (!cancelled) setIpa(res || '');
-    });
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      fetchPhonetic(word, lang).then((res) => {
+        if (!cancelled) setIpa(res || '');
+      });
+    }, 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [word, explicit, lang]);
 
@@ -306,6 +315,243 @@ function PopupPhonetic({ word, phonetic, lang, stressBadge }) {
   );
 }
 
+function findFirstIndexAfter(offsets, count, target) {
+  let low = 0;
+  let high = count;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (offsets[mid + 1] <= target) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
+function VirtualDueWordList({
+  words,
+  showMeanings,
+  revealedIds,
+  speechAvailable,
+  speakingId,
+  sheetLang,
+  t,
+  onToggleReveal,
+  onSpeak,
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const [measureVersion, setMeasureVersion] = useState(0);
+  const measuredHeightsRef = useRef(new Map());
+  const nodeToIdRef = useRef(new Map());
+  const idToNodeRef = useRef(new Map());
+  const observerRef = useRef(null);
+  const rafRef = useRef(null);
+  const latestScrollTopRef = useRef(0);
+
+  useEffect(() => {
+    const ro = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const id = nodeToIdRef.current.get(entry.target);
+        if (!id) continue;
+        const nextHeight = Math.ceil(entry.target.offsetHeight || entry.contentRect.height);
+        if (nextHeight <= 0) continue;
+        const prevHeight = measuredHeightsRef.current.get(id);
+        if (prevHeight === undefined || Math.abs(prevHeight - nextHeight) >= 1) {
+          measuredHeightsRef.current.set(id, nextHeight);
+          changed = true;
+        }
+      }
+      if (changed) {
+        setMeasureVersion((v) => v + 1);
+      }
+    });
+
+    observerRef.current = ro;
+    for (const el of nodeToIdRef.current.keys()) {
+      ro.observe(el);
+    }
+
+    return () => {
+      ro.disconnect();
+      observerRef.current = null;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
+
+  const registerRowRef = useCallback((id, el) => {
+    const prevEl = idToNodeRef.current.get(id);
+    if (prevEl && prevEl !== el) {
+      observerRef.current?.unobserve(prevEl);
+      nodeToIdRef.current.delete(prevEl);
+      idToNodeRef.current.delete(id);
+    }
+
+    if (el) {
+      idToNodeRef.current.set(id, el);
+      nodeToIdRef.current.set(el, id);
+      observerRef.current?.observe(el);
+      const measured = Math.ceil(el.offsetHeight);
+      if (measured > 0) {
+        const prevHeight = measuredHeightsRef.current.get(id);
+        if (prevHeight === undefined || Math.abs(prevHeight - measured) >= 1) {
+          measuredHeightsRef.current.set(id, measured);
+          setMeasureVersion((v) => v + 1);
+        }
+      }
+    }
+  }, []);
+
+  const handleScroll = useCallback((e) => {
+    latestScrollTopRef.current = e.currentTarget.scrollTop;
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setScrollTop(latestScrollTopRef.current);
+    });
+  }, []);
+
+  const { offsets, totalHeight } = useMemo(() => {
+    const count = words.length;
+    const pos = new Float64Array(count + 1);
+    let y = 0;
+    for (let i = 0; i < count; i += 1) {
+      pos[i] = y;
+      const item = words[i];
+      const isRevealed = showMeanings || revealedIds.has(item.id);
+      const fallback = isRevealed
+        ? VIRTUAL_ESTIMATED_EXPANDED
+        : VIRTUAL_ESTIMATED_COLLAPSED;
+      const h = measuredHeightsRef.current.get(item.id) ?? fallback;
+      y += h + (i < count - 1 ? VIRTUAL_ITEM_GAP : 0);
+    }
+    pos[count] = y;
+    return { offsets: pos, totalHeight: y };
+    // measureVersion intentionally invalidates cached prefix sums after ResizeObserver updates
+  }, [words, showMeanings, revealedIds, measureVersion]);
+
+  const count = words.length;
+  const clampedScrollTop = Math.min(scrollTop, Math.max(0, totalHeight - VIRTUAL_VIEWPORT_HEIGHT));
+  const rawStart = findFirstIndexAfter(offsets, count, clampedScrollTop);
+  const rawEnd = findFirstIndexAfter(
+    offsets,
+    count,
+    clampedScrollTop + VIRTUAL_VIEWPORT_HEIGHT
+  );
+  const startIdx = Math.max(0, rawStart - VIRTUAL_OVERSCAN);
+  const endIdx = Math.min(count, rawEnd + 1 + VIRTUAL_OVERSCAN);
+
+  return (
+    <div
+      onScroll={handleScroll}
+      style={{ maxHeight: VIRTUAL_VIEWPORT_HEIGHT }}
+      className="overflow-y-auto pr-0.5"
+    >
+      <ul
+        style={{ height: totalHeight, position: 'relative' }}
+        className="m-0 list-none p-0"
+      >
+        {words.slice(startIdx, endIdx).map((item, idx) => {
+          const actualIdx = startIdx + idx;
+          const isRevealed = showMeanings || revealedIds.has(item.id);
+          const rep = Number(item.repetition) || 0;
+          return (
+            <li
+              key={item.id}
+              ref={(el) => registerRowRef(item.id, el)}
+              style={{
+                position: 'absolute',
+                top: offsets[actualIdx],
+                left: 0,
+                right: 0,
+              }}
+            >
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => onToggleReveal(item.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onToggleReveal(item.id);
+                  }
+                }}
+                className="w-full cursor-pointer rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xs transition-colors hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline-2 focus-visible:outline-blue-600"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-sm font-bold text-slate-900">
+                      {item.word}
+                    </span>
+                    {speechAvailable && (
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => onSpeak(e, item)}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        aria-label={t.pronounceAria(item.word)}
+                        className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
+                          speakingId === item.id
+                            ? 'bg-blue-600 text-white'
+                            : 'text-blue-600 hover:bg-blue-100 hover:text-blue-700'
+                        }`}
+                      >
+                        <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      rep === 0
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-sky-100 text-sky-800'
+                    }`}
+                  >
+                    {rep === 0 ? t.newBadge : t.repBadge(rep)}
+                  </span>
+                </div>
+
+                <PopupPhonetic
+                  word={item.word}
+                  phonetic={item.phonetic}
+                  lang={sheetLang}
+                  stressBadge={t.stressBadge}
+                />
+
+                <div className="mt-1">
+                  {isRevealed ? (
+                    <p className="text-xs font-semibold text-blue-700">
+                      {item.meaning || (
+                        <span className="italic font-normal text-slate-400">
+                          {t.noMeaning}
+                        </span>
+                      )}
+                    </p>
+                  ) : (
+                    <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
+                      {t.tapToReveal}
+                    </span>
+                  )}
+                </div>
+
+                {isRevealed && item.context && (
+                  <p className="mt-1.5 line-clamp-2 border-l-2 border-blue-200 pl-2 text-[11px] leading-relaxed text-slate-500">
+                    {item.context}
+                  </p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export default function Popup() {
   const [view, setView] = useState('words'); // 'words' | 'settings'
   const [uiLang, setUiLang] = useState('vi');
@@ -325,6 +571,9 @@ export default function Popup() {
   const [errorMsg, setErrorMsg] = useState('');
   const [loaded, setLoaded] = useState(false);
 
+  const uiLangRef = useRef(uiLang);
+  uiLangRef.current = uiLang;
+
   const t = I18N[uiLang] || I18N.vi;
   const speechAvailable = isSpeechSupported();
 
@@ -342,9 +591,10 @@ export default function Popup() {
     async (
       targetGasUrl,
       targetSheetLang = DEFAULT_SHEET_LANG,
-      langKey = uiLang,
+      langKey,
       { force = false } = {}
     ) => {
+      const effectiveLang = langKey || uiLangRef.current || 'vi';
       const cleanUrl = normalizeGasUrl(targetGasUrl);
       if (!cleanUrl) {
         setDueWords([]);
@@ -364,7 +614,7 @@ export default function Popup() {
           });
           if (!response || response.ok === false) {
             if (response?.error === 'HTTP 404') {
-              const copy = I18N[langKey] || I18N.vi;
+              const copy = I18N[effectiveLang] || I18N.vi;
               throw new Error(copy.fetch404Hint);
             }
             throw new Error(response?.error || 'Network error');
@@ -389,7 +639,7 @@ export default function Popup() {
 
         if (!response.ok) {
           if (response.status === 404) {
-            const copy = I18N[langKey] || I18N.vi;
+            const copy = I18N[effectiveLang] || I18N.vi;
             throw new Error(copy.fetch404Hint);
           }
           throw new Error(`HTTP ${response.status}`);
@@ -411,13 +661,13 @@ export default function Popup() {
         setDueWords(list);
         setLastUpdatedAt(updatedAt);
       } catch (err) {
-        const copy = I18N[langKey] || I18N.vi;
+        const copy = I18N[effectiveLang] || I18N.vi;
         setWordsError(copy.fetchErr(err?.message || 'Network error'));
       } finally {
         setLoadingWords(false);
       }
     },
-    [uiLang]
+    []
   );
 
   useEffect(() => {
@@ -757,90 +1007,17 @@ export default function Popup() {
                 </p>
               </div>
             ) : (
-              <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-0.5">
-                {dueWords.map((item) => {
-                  const isRevealed = showMeanings || revealedIds.has(item.id);
-                  const rep = Number(item.repetition) || 0;
-                  return (
-                    <li key={item.id}>
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => toggleWordReveal(item.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            toggleWordReveal(item.id);
-                          }
-                        }}
-                        className="w-full cursor-pointer rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xs transition-colors hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline-2 focus-visible:outline-blue-600"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-sm font-bold text-slate-900">
-                              {item.word}
-                            </span>
-                            {speechAvailable && (
-                              <button
-                                type="button"
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={(e) => handleSpeak(e, item)}
-                                onKeyDown={(e) => e.stopPropagation()}
-                                aria-label={t.pronounceAria(item.word)}
-                                className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
-                                  speakingId === item.id
-                                    ? 'bg-blue-600 text-white'
-                                    : 'text-blue-600 hover:bg-blue-100 hover:text-blue-700'
-                                }`}
-                              >
-                                <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
-                              </button>
-                            )}
-                          </div>
-                          <span
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                              rep === 0
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-sky-100 text-sky-800'
-                            }`}
-                          >
-                            {rep === 0 ? t.newBadge : t.repBadge(rep)}
-                          </span>
-                        </div>
-
-                        <PopupPhonetic
-                          word={item.word}
-                          phonetic={item.phonetic}
-                          lang={sheetLang}
-                          stressBadge={t.stressBadge}
-                        />
-
-                        <div className="mt-1">
-                          {isRevealed ? (
-                            <p className="text-xs font-semibold text-blue-700">
-                              {item.meaning || (
-                                <span className="italic font-normal text-slate-400">
-                                  {t.noMeaning}
-                                </span>
-                              )}
-                            </p>
-                          ) : (
-                            <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
-                              {t.tapToReveal}
-                            </span>
-                          )}
-                        </div>
-
-                        {isRevealed && item.context && (
-                          <p className="mt-1.5 line-clamp-2 border-l-2 border-blue-200 pl-2 text-[11px] leading-relaxed text-slate-500">
-                            {item.context}
-                          </p>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              <VirtualDueWordList
+                words={dueWords}
+                showMeanings={showMeanings}
+                revealedIds={revealedIds}
+                speechAvailable={speechAvailable}
+                speakingId={speakingId}
+                sheetLang={sheetLang}
+                t={t}
+                onToggleReveal={toggleWordReveal}
+                onSpeak={handleSpeak}
+              />
             )}
 
             {/* Launch Web App CTA */}

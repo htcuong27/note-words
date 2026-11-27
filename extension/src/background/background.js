@@ -9,7 +9,7 @@
 const DEFAULT_SHEET_LANG = 'English';
 const ALARM_NAME = 'notewords-refresh-due-badge';
 const BADGE_BG_COLOR = '#2563eb';
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 const CACHE_STORAGE_KEYS = [
   'CACHED_DUE_WORDS',
   'CACHED_DUE_UPDATED_AT',

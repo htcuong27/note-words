@@ -70,30 +70,6 @@
     );
   }
 
-  function prewarmVoices() {
-    if (!isSpeechSupported()) return;
-    try {
-      window.speechSynthesis.getVoices();
-      if (typeof window.speechSynthesis.addEventListener === 'function') {
-        window.speechSynthesis.addEventListener(
-          'voiceschanged',
-          () => {
-            try {
-              window.speechSynthesis.getVoices();
-            } catch {
-              // Ignore voice loading errors
-            }
-          },
-          { once: true }
-        );
-      }
-    } catch {
-      // Ignore restricted page errors
-    }
-  }
-
-  prewarmVoices();
-
   function pickLocalEnglishVoice() {
     const voices = window.speechSynthesis.getVoices();
     if (!voices || voices.length === 0) return null;

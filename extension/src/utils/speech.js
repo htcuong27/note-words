@@ -87,10 +87,6 @@ function ensureVoicesPrewarmed() {
   }
 }
 
-if (typeof window !== 'undefined') {
-  ensureVoicesPrewarmed();
-}
-
 function warmUpAudioContext() {
   if (typeof window === 'undefined') return;
   const AudioCtx = window.AudioContext || window.webkitAudioContext;

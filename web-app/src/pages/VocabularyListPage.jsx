@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw, Search } from 'lucide-react';
 import WordTable from '../components/WordTable';
 import {
@@ -27,6 +27,8 @@ export default function VocabularyListPage({
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const t = getTranslations(uiLang).list;
+  const loadErrRef = useRef(t.loadErr);
+  loadErrRef.current = t.loadErr;
 
   const loadAllWords = useCallback(
     async ({ forceRefresh = false } = {}) => {
@@ -49,12 +51,12 @@ export default function VocabularyListPage({
         const meta = getWordsCacheMeta({ lang: currentLang });
         setLastSyncedAt(meta?.updatedAt || Date.now());
       } catch (err) {
-        setError(err.message || t.loadErr);
+        setError(err.message || loadErrRef.current);
       } finally {
         setLoading(false);
       }
     },
-    [apiUrl, currentLang, t.loadErr]
+    [apiUrl, currentLang]
   );
 
   useEffect(() => {

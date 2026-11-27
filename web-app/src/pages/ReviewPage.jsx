@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -46,6 +46,8 @@ export default function ReviewPage({
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const t = getTranslations(uiLang).review;
+  const loadErrorRef = useRef(t.loadError);
+  loadErrorRef.current = t.loadError;
 
   const resetCardPractice = useCallback(() => {
     setStage('front');
@@ -84,13 +86,13 @@ export default function ReviewPage({
         const meta = getWordsCacheMeta({ lang: currentLang });
         setLastSyncedAt(meta?.updatedAt || Date.now());
       } catch (err) {
-        setError(err.message || t.loadError);
+        setError(err.message || loadErrorRef.current);
         setQueue([]);
       } finally {
         setLoading(false);
       }
     },
-    [apiUrl, currentLang, dueOnly, resetCardPractice, t.loadError]
+    [apiUrl, currentLang, dueOnly, resetCardPractice]
   );
 
   useEffect(() => {
