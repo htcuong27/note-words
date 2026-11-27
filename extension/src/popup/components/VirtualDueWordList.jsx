@@ -45,15 +45,17 @@ export default function VirtualDueWordList({
     const ro = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
-        const id = nodeToIdRef.current.get(entry.target);
-        if (!id) continue;
+        const measureKey =
+          entry.target.dataset?.nwMeasureKey ||
+          nodeToIdRef.current.get(entry.target);
+        if (!measureKey) continue;
         const nextHeight = Math.ceil(
           entry.target.offsetHeight || entry.contentRect.height
         );
         if (nextHeight <= 0) continue;
-        const prevHeight = measuredHeightsRef.current.get(id);
+        const prevHeight = measuredHeightsRef.current.get(measureKey);
         if (prevHeight === undefined || Math.abs(prevHeight - nextHeight) >= 1) {
-          measuredHeightsRef.current.set(id, nextHeight);
+          measuredHeightsRef.current.set(measureKey, nextHeight);
           changed = true;
         }
       }
@@ -77,7 +79,7 @@ export default function VirtualDueWordList({
     };
   }, []);
 
-  const registerRowRef = useCallback((id, el) => {
+  const registerRowRef = useCallback((id, measureKey, el) => {
     const prevEl = idToNodeRef.current.get(id);
     if (prevEl && prevEl !== el) {
       observerRef.current?.unobserve(prevEl);
@@ -86,14 +88,15 @@ export default function VirtualDueWordList({
     }
 
     if (el) {
+      el.dataset.nwMeasureKey = measureKey;
       idToNodeRef.current.set(id, el);
-      nodeToIdRef.current.set(el, id);
+      nodeToIdRef.current.set(el, measureKey);
       observerRef.current?.observe(el);
       const measured = Math.ceil(el.offsetHeight);
       if (measured > 0) {
-        const prevHeight = measuredHeightsRef.current.get(id);
+        const prevHeight = measuredHeightsRef.current.get(measureKey);
         if (prevHeight === undefined || Math.abs(prevHeight - measured) >= 1) {
-          measuredHeightsRef.current.set(id, measured);
+          measuredHeightsRef.current.set(measureKey, measured);
           setMeasureVersion((v) => v + 1);
         }
       }
@@ -117,10 +120,11 @@ export default function VirtualDueWordList({
       pos[i] = y;
       const item = words[i];
       const isRevealed = showMeanings || revealedIds.has(item.id);
+      const measureKey = `${item.id}:${isRevealed ? 1 : 0}`;
       const fallback = isRevealed
         ? VIRTUAL_ESTIMATED_EXPANDED
         : VIRTUAL_ESTIMATED_COLLAPSED;
-      const h = measuredHeightsRef.current.get(item.id) ?? fallback;
+      const h = measuredHeightsRef.current.get(measureKey) ?? fallback;
       y += h + (i < count - 1 ? VIRTUAL_ITEM_GAP : 0);
     }
     pos[count] = y;
@@ -155,10 +159,12 @@ export default function VirtualDueWordList({
         {words.slice(startIdx, endIdx).map((item, idx) => {
           const actualIdx = startIdx + idx;
           const isRevealed = showMeanings || revealedIds.has(item.id);
+          const measureKey = `${item.id}:${isRevealed ? 1 : 0}`;
           return (
             <li
               key={item.id}
-              ref={(el) => registerRowRef(item.id, el)}
+              data-nw-measure-key={measureKey}
+              ref={(el) => registerRowRef(item.id, measureKey, el)}
               style={{
                 position: 'absolute',
                 top: offsets[actualIdx],

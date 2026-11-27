@@ -20,6 +20,17 @@ export const DEFAULT_LANG = 'English';
 export const DEFAULT_UI_LANG = 'vi';
 
 const inflightRequests = new Map();
+const reviewSyncChains = new Map();
+const reviewSyncSeq = new Map();
+let memoryWordsCache = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === null || event.key === STORAGE_KEYS.WORDS_CACHE) {
+      memoryWordsCache = null;
+    }
+  });
+}
 
 export function cleanWordText(raw) {
   return String(raw || '')
@@ -49,17 +60,26 @@ function buildCacheKey(baseUrl, lang) {
 }
 
 function readAllWordsCache() {
+  if (memoryWordsCache !== null) {
+    return memoryWordsCache;
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.WORDS_CACHE);
-    if (!raw) return {};
+    if (!raw) {
+      memoryWordsCache = {};
+      return memoryWordsCache;
+    }
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    memoryWordsCache = parsed && typeof parsed === 'object' ? parsed : {};
+    return memoryWordsCache;
   } catch {
-    return {};
+    memoryWordsCache = {};
+    return memoryWordsCache;
   }
 }
 
 function writeAllWordsCache(cacheMap) {
+  memoryWordsCache = cacheMap;
   try {
     localStorage.setItem(STORAGE_KEYS.WORDS_CACHE, JSON.stringify(cacheMap));
   } catch {
@@ -122,6 +142,7 @@ export function patchCachedWord({ id, patch, lang = getCurrentLang(), url } = {}
 }
 
 export function clearWordsCache() {
+  memoryWordsCache = {};
   try {
     localStorage.removeItem(STORAGE_KEYS.WORDS_CACHE);
   } catch {
@@ -342,8 +363,10 @@ export async function addWord({
 
 /**
  * Sync SM-2 review result to Google Sheets.
+ * Serializes updates per card ID in FIFO order so rapid repeated ratings
+ * (e.g. Again -> requeued -> Good) never land out-of-order or overwrite newer local state.
  */
-export async function updateReview({
+export function updateReview({
   id,
   repetition,
   interval,
@@ -354,27 +377,49 @@ export async function updateReview({
   lang = getCurrentLang(),
 }) {
   const baseUrl = requireApiUrl();
-  const json = await postGas(
-    {
-      action: 'UPDATE_REVIEW',
-      lang,
-      id,
-      repetition,
-      interval,
-      easeFactor,
-      nextReviewDate,
-      lastReviewedAt,
-      quality,
-    },
-    baseUrl
-  );
-  if (json.data) {
-    const cacheKey = buildCacheKey(baseUrl, lang);
-    mutateWordsCache(cacheKey, (words) =>
-      words.map((item) => (item.id === id ? { ...item, ...json.data } : item))
+  const cacheKey = buildCacheKey(baseUrl, lang);
+  const lockKey = `${cacheKey}::${id}`;
+  const seq = (reviewSyncSeq.get(lockKey) || 0) + 1;
+  reviewSyncSeq.set(lockKey, seq);
+
+  const prevChain = reviewSyncChains.get(lockKey) || Promise.resolve();
+
+  const runSync = async () => {
+    const json = await postGas(
+      {
+        action: 'UPDATE_REVIEW',
+        lang,
+        id,
+        repetition,
+        interval,
+        easeFactor,
+        nextReviewDate,
+        lastReviewedAt,
+        quality,
+      },
+      baseUrl
     );
-  }
-  return json.data;
+    // Only apply server response to local cache if no newer rating for this card is queued
+    if (json.data && reviewSyncSeq.get(lockKey) === seq) {
+      mutateWordsCache(cacheKey, (words) =>
+        words.map((item) => (item.id === id ? { ...item, ...json.data } : item))
+      );
+    }
+    return json.data;
+  };
+
+  const nextChain = prevChain.catch(() => {}).then(runSync);
+  reviewSyncChains.set(lockKey, nextChain);
+
+  nextChain
+    .finally(() => {
+      if (reviewSyncChains.get(lockKey) === nextChain) {
+        reviewSyncChains.delete(lockKey);
+      }
+    })
+    .catch(() => {});
+
+  return nextChain;
 }
 
 /**

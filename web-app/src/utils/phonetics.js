@@ -16,6 +16,7 @@ const HIT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MISS_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const MAX_CACHE_ENTRIES = 200;
 const MAX_CONCURRENT_FETCHES = 4;
+const PERSIST_DEBOUNCE_MS = 400;
 
 const IPA_VOWELS = 'iɪeɛæaɑɒɔoʊuʌəɚɜɝɨʉʏøœɐɶɯɤ';
 const IPA_NUCLEUS_RE = new RegExp(`[${IPA_VOWELS}]+ː?`, 'g');
@@ -29,6 +30,9 @@ const inflightMap = new Map();
 const fetchQueue = [];
 let activeFetches = 0;
 let storageLoaded = false;
+let persistTimer = null;
+let persistDirty = false;
+let flushListenersAttached = false;
 
 function isEnglishLang(lang = 'English') {
   const lower = String(lang || 'English').trim().toLowerCase();
@@ -94,6 +98,11 @@ function loadStorageCacheOnce() {
 }
 
 function persistStorageCache() {
+  persistDirty = false;
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   if (typeof localStorage === 'undefined') return;
   try {
     const now = Date.now();
@@ -125,13 +134,45 @@ function persistStorageCache() {
   }
 }
 
+function attachFlushListenersOnce() {
+  if (flushListenersAttached || typeof window === 'undefined') return;
+  flushListenersAttached = true;
+
+  const flushIfDirty = () => {
+    if (persistDirty) {
+      persistStorageCache();
+    }
+  };
+
+  window.addEventListener('pagehide', flushIfDirty);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        flushIfDirty();
+      }
+    });
+  }
+}
+
+function schedulePersistStorageCache() {
+  persistDirty = true;
+  attachFlushListenersOnce();
+  if (persistTimer !== null) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (persistDirty) {
+      persistStorageCache();
+    }
+  }, PERSIST_DEBOUNCE_MS);
+}
+
 function setCachedEntry(key, ipa) {
   loadStorageCacheOnce();
   const normalized = ipa || '';
   const ttl = normalized ? HIT_TTL_MS : MISS_TTL_MS;
   memoryCache.delete(key); // Refresh LRU position
   memoryCache.set(key, { ipa: normalized, expiresAt: Date.now() + ttl });
-  persistStorageCache();
+  schedulePersistStorageCache();
 }
 
 function runQueuedFetch(fn) {

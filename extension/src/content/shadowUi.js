@@ -151,6 +151,7 @@ export function createShadowUi({
   let floatBtn = null;
   let toastEl = null;
   let toastTimer = null;
+  let toolbarVisible = false;
 
   function ensureMounted() {
     if (shadowRoot && document.contains(hostEl)) return;
@@ -261,6 +262,7 @@ export function createShadowUi({
     toolbarEl.style.top = `${Math.round(top)}px`;
     toolbarEl.style.left = `${Math.round(left)}px`;
     toolbarEl.classList.add('visible');
+    toolbarVisible = true;
   }
 
   function setSavingState() {
@@ -271,6 +273,8 @@ export function createShadowUi({
   }
 
   function hideToolbar() {
+    if (!toolbarVisible && !floatBtn?.disabled) return;
+    toolbarVisible = false;
     if (toolbarEl) {
       toolbarEl.classList.remove('visible');
     }
@@ -278,6 +282,10 @@ export function createShadowUi({
       floatBtn.disabled = false;
       floatBtn.textContent = getCopy().saveBtn;
     }
+  }
+
+  function isVisible() {
+    return toolbarVisible;
   }
 
   function showToast(message, variant = 'success') {
@@ -295,6 +303,7 @@ export function createShadowUi({
 
   return {
     isHostEvent,
+    isVisible,
     updateLabels,
     positionToolbar,
     setSavingState,

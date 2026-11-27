@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, RotateCw, Sparkles, Volume2 } from 'lucide-react';
 import PhoneticBadge from './PhoneticBadge';
 import { getTranslations } from '../utils/i18n';
@@ -8,25 +8,33 @@ import { escapeRegExp } from '../utils/text';
 /**
  * Highlight occurrences of `word` inside `context` (case-insensitive).
  */
-export function HighlightedContext({ context, word, uiLang = 'vi' }) {
+export const HighlightedContext = memo(function HighlightedContext({
+  context,
+  word,
+  uiLang = 'vi',
+}) {
   const t = getTranslations(uiLang).flashcard;
+  const trimmedWord = String(word || '').trim();
+  const lowerWord = trimmedWord.toLowerCase();
+
+  const parts = useMemo(() => {
+    if (!context || !trimmedWord) return null;
+    const regex = new RegExp(`(${escapeRegExp(trimmedWord)})`, 'gi');
+    return String(context).split(regex);
+  }, [context, trimmedWord]);
 
   if (!context) {
     return <span className="italic text-slate-400">{t.noContext}</span>;
   }
 
-  const trimmedWord = String(word || '').trim();
-  if (!trimmedWord) {
+  if (!parts) {
     return <span>{context}</span>;
   }
-
-  const regex = new RegExp(`(${escapeRegExp(trimmedWord)})`, 'gi');
-  const parts = String(context).split(regex);
 
   return (
     <>
       {parts.map((part, idx) =>
-        part.toLowerCase() === trimmedWord.toLowerCase() ? (
+        part.toLowerCase() === lowerWord ? (
           <mark
             key={idx}
             className="rounded bg-blue-100 px-1 py-0.5 font-semibold text-blue-950"
@@ -39,7 +47,7 @@ export function HighlightedContext({ context, word, uiLang = 'vi' }) {
       )}
     </>
   );
-}
+});
 
 export default function Flashcard({
   card,

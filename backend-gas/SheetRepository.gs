@@ -23,7 +23,7 @@ function getOrCreateSheet(sheetName) {
     headerRange.setValues([SHEET_HEADERS]);
     headerRange.setFontWeight("bold");
     sheet.setFrozenRows(1);
-  } else {
+  } else if (sheet.getLastColumn() < SHEET_HEADERS.length) {
     // Auto-migrate older sheets missing newer trailing columns (e.g. `phonetic`)
     const existingHeaders = sheet
       .getRange(1, 1, 1, SHEET_HEADERS.length)
@@ -41,14 +41,17 @@ function getOrCreateSheet(sheetName) {
 }
 
 /**
- * Format date/timestamp columns as plain text ("@") to prevent Google Sheets Date coercion.
+ * Format date/timestamp columns as plain text ("@") BEFORE writing values
+ * to prevent Google Sheets Date coercion, using a single Sheets RPC.
  */
 function formatDateColumnsAsText(sheet, rowIndex, includeCreatedAt) {
   if (includeCreatedAt) {
-    sheet.getRange(rowIndex, 6).setNumberFormat("@"); // createdAt
+    sheet
+      .getRangeList(["F" + rowIndex, "J" + rowIndex + ":K" + rowIndex])
+      .setNumberFormat("@");
+  } else {
+    sheet.getRange(rowIndex, 10, 1, 2).setNumberFormat("@");
   }
-  sheet.getRange(rowIndex, 10).setNumberFormat("@"); // nextReviewDate
-  sheet.getRange(rowIndex, 11).setNumberFormat("@"); // lastReviewedAt
 }
 
 /**

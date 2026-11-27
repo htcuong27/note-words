@@ -21,6 +21,7 @@ import {
 } from '../utils/api';
 import { RATING, calculateSM2 } from '../utils/sm2';
 import { getTranslations } from '../utils/i18n';
+import { fetchPhonetic } from '../utils/phonetics';
 import { speakWord, stopSpeaking } from '../utils/speech';
 import {
   getFillableIndices,
@@ -102,7 +103,26 @@ export default function ReviewPage({
     loadCards(dueOnly);
   }, [loadCards, dueOnly]);
 
+  // Warn before closing tab if review syncs are still in flight
+  useEffect(() => {
+    if (pendingSyncs <= 0) return;
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [pendingSyncs]);
+
   const currentCard = queue[0] || null;
+  const nextCard = queue[1] || null;
+
+  // Pre-warm IPA cache for the next card in the review queue
+  useEffect(() => {
+    if (nextCard?.word && !nextCard.phonetic) {
+      fetchPhonetic(nextCard.word, currentLang);
+    }
+  }, [nextCard?.id, nextCard?.word, nextCard?.phonetic, currentLang]);
   const currentWrongAttempts = currentCard
     ? wrongAttemptsById[currentCard.id] || 0
     : 0;

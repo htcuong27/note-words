@@ -20,11 +20,10 @@ import { createShadowUi } from './shadowUi';
   if (window.__NOTEWORDS_CONTENT_LOADED__) return;
   window.__NOTEWORDS_CONTENT_LOADED__ = true;
 
-  const DEFAULT_LANG = 'English';
-
   let currentPayload = null;
   let isSaving = false;
   let uiLang = 'vi';
+  let selectionTimer = null;
 
   const t = () => getContentCopy(uiLang);
 
@@ -42,6 +41,10 @@ import { createShadowUi } from './shadowUi';
   });
 
   function hideButton() {
+    if (selectionTimer !== null) {
+      clearTimeout(selectionTimer);
+      selectionTimer = null;
+    }
     ui.hideToolbar();
     currentPayload = null;
     isSaving = false;
@@ -123,54 +126,87 @@ import { createShadowUi } from './shadowUi';
     }
   }
 
-  document.addEventListener('mouseup', (event) => {
-    if (ui.isHostEvent(event.target)) return;
-    if (isEditableTarget(event.target)) {
-      hideButton();
-      return;
-    }
-
-    setTimeout(() => {
-      if (isSaving) return;
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+  document.addEventListener(
+    'mouseup',
+    (event) => {
+      if (ui.isHostEvent(event.target)) return;
+      if (isEditableTarget(event.target)) {
         hideButton();
         return;
       }
 
-      const word = cleanSelectedWord(selection.toString());
-      if (!word || word.length > MAX_WORD_LENGTH || !/[a-zA-Z]/.test(word)) {
-        hideButton();
+      if (selectionTimer !== null) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
+
+      // Fast path: skip scheduling a timer on ordinary clicks with no text selection
+      const preSelection = window.getSelection();
+      if (!preSelection || preSelection.isCollapsed || preSelection.rangeCount === 0) {
+        if (ui.isVisible() && !isSaving) {
+          hideButton();
+        }
         return;
       }
 
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) {
+      selectionTimer = setTimeout(() => {
+        selectionTimer = null;
+        if (isSaving) return;
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+          hideButton();
+          return;
+        }
+
+        const word = cleanSelectedWord(selection.toString());
+        if (!word || word.length > MAX_WORD_LENGTH || !/[a-zA-Z]/.test(word)) {
+          hideButton();
+          return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        if (!rect || (rect.width === 0 && rect.height === 0)) {
+          hideButton();
+          return;
+        }
+
+        // Omit `lang` so background.js uses the active `NOTE_WORD_LANG` from chrome.storage.sync
+        currentPayload = {
+          word,
+          context: extractContext(selection, word),
+          sourceUrl: window.location.href,
+        };
+
+        ui.positionToolbar(rect);
+      }, 10);
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    'mousedown',
+    (event) => {
+      if (ui.isHostEvent(event.target)) return;
+      if (ui.isVisible() && !isSaving) {
         hideButton();
-        return;
       }
+    },
+    { passive: true }
+  );
 
-      currentPayload = {
-        word,
-        context: extractContext(selection, word),
-        sourceUrl: window.location.href,
-        lang: DEFAULT_LANG,
-      };
-
-      ui.positionToolbar(rect);
-    }, 10);
-  });
-
-  document.addEventListener('mousedown', (event) => {
-    if (ui.isHostEvent(event.target)) return;
-    if (!isSaving) {
-      hideButton();
-    }
-  });
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (ui.isVisible() && !isSaving) {
+        hideButton();
+      }
+    },
+    { capture: true, passive: true }
+  );
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !isSaving) {
+    if (event.key === 'Escape' && ui.isVisible() && !isSaving) {
       hideButton();
     }
   });

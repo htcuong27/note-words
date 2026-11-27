@@ -78,16 +78,26 @@ function doGet(e) {
 }
 
 /**
+ * Execute a callback while holding the Apps Script document/script lock.
+ */
+function withScriptLock(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * HTTP POST handler
  * Expects JSON body (sent with Content-Type: text/plain;charset=utf-8 to avoid CORS preflight,
  * or application/json from server/curl):
  *   { action: "ADD_WORD" | "UPDATE_REVIEW" | "EDIT_WORD" | "DELETE_WORD", lang?: "English", ... }
  */
 function doPost(e) {
-  const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(10000);
-
     if (!e || !e.postData || !e.postData.contents) {
       return jsonResponse({
         success: false,
@@ -110,6 +120,8 @@ function doPost(e) {
 
     switch (action) {
       case "ADD_WORD": {
+        // handleAddWord performs external translate/IPA fetches outside the lock
+        // and acquires ScriptLock only for the atomic duplicate check + row insert.
         const result = handleAddWord(lang, payload);
         return jsonResponse({
           success: true,
@@ -121,7 +133,9 @@ function doPost(e) {
       }
 
       case "UPDATE_REVIEW": {
-        const updated = handleUpdateReview(lang, payload);
+        const updated = withScriptLock(function () {
+          return handleUpdateReview(lang, payload);
+        });
         return jsonResponse({
           success: true,
           action: action,
@@ -131,7 +145,9 @@ function doPost(e) {
       }
 
       case "EDIT_WORD": {
-        const edited = handleEditWord(lang, payload);
+        const edited = withScriptLock(function () {
+          return handleEditWord(lang, payload);
+        });
         return jsonResponse({
           success: true,
           action: action,
@@ -141,7 +157,9 @@ function doPost(e) {
       }
 
       case "DELETE_WORD": {
-        const deletedId = handleDeleteWord(lang, payload);
+        const deletedId = withScriptLock(function () {
+          return handleDeleteWord(lang, payload);
+        });
         return jsonResponse({
           success: true,
           action: action,
@@ -161,8 +179,6 @@ function doPost(e) {
       success: false,
       error: err.message || String(err),
     });
-  } finally {
-    lock.releaseLock();
   }
 }
 

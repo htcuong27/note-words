@@ -5,12 +5,13 @@
   "description": "Quét chọn từ tiếng Anh trên web và lưu kèm ngữ cảnh vào Google Sheets để ôn tập SRS.",
   "permissions": [
     "storage",
-    "activeTab",
-    "scripting",
     "alarms"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*",
+    "https://api.datamuse.com/*",
+    "https://translate.google.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

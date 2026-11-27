@@ -90,6 +90,7 @@ const WordTableRow = memo(function WordTableRow({
                 lang={lang}
                 uiLang={uiLang}
                 size="sm"
+                lazy
                 className="justify-start"
               />
             </div>

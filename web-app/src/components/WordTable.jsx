@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WordTableRow from './WordTableRow';
 import { cleanWordText } from '../utils/api';
 import { getTranslations } from '../utils/i18n';
 import { isSpeechSupported, speakWord, stopSpeaking } from '../utils/speech';
+
+const INITIAL_VISIBLE_ROWS = 60;
+const ROWS_CHUNK_SIZE = 60;
 
 const EMPTY_DRAFT = {
   word: '',
@@ -24,7 +27,10 @@ export default function WordTable({
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [speakingId, setSpeakingId] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
 
+  const wrapperRef = useRef(null);
+  const sentinelRef = useRef(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
@@ -36,6 +42,43 @@ export default function WordTable({
       stopSpeaking();
     };
   }, []);
+
+  // Reset progressive window when list changes while user is scrolled at the top
+  useEffect(() => {
+    if (!wrapperRef.current || wrapperRef.current.scrollTop === 0) {
+      setVisibleCount(INITIAL_VISIBLE_ROWS);
+    }
+  }, [words]);
+
+  const hasMoreRows = visibleCount < words.length;
+  const visibleWords = useMemo(
+    () => (hasMoreRows ? words.slice(0, visibleCount) : words),
+    [words, visibleCount, hasMoreRows]
+  );
+
+  useEffect(() => {
+    if (!hasMoreRows) return;
+    const sentinel = sentinelRef.current;
+    const root = wrapperRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') {
+      setVisibleCount(words.length);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((prev) =>
+            Math.min(words.length, prev + ROWS_CHUNK_SIZE)
+          );
+        }
+      },
+      { root, rootMargin: '250px 0px' }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreRows, words.length]);
 
   const handleSpeak = useCallback(
     (item) => {
@@ -120,6 +163,7 @@ export default function WordTable({
 
   return (
     <div
+      ref={wrapperRef}
       tabIndex={0}
       role="region"
       aria-labelledby="word-table-caption"
@@ -152,7 +196,7 @@ export default function WordTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {words.map((item) => {
+          {visibleWords.map((item) => {
             const isEditing = editingId === item.id;
             return (
               <WordTableRow
@@ -181,6 +225,9 @@ export default function WordTable({
           })}
         </tbody>
       </table>
+      {hasMoreRows && (
+        <div ref={sentinelRef} className="h-4 w-full" aria-hidden="true" />
+      )}
     </div>
   );
 }

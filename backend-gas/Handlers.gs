@@ -43,6 +43,9 @@ function handleGetWords(lang, dueOnly) {
 /**
  * Add a new vocabulary word with auto EN->VI translation (if meaning is empty)
  * and default SM-2 values. Skips inserting if an identical word (after trim) already exists.
+ *
+ * External API calls (`translateWord`, `fetchPhonetic`) run outside ScriptLock to avoid
+ * blocking concurrent requests; duplicate check + row insert run atomically under ScriptLock.
  */
 function handleAddWord(lang, payload) {
   const word = cleanWordText(payload.word);
@@ -50,12 +53,12 @@ function handleAddWord(lang, payload) {
     throw new Error('Field "word" is required.');
   }
 
-  const sheet = getOrCreateSheet(lang);
-  const existing = findRowByWord(sheet, word);
-  if (existing) {
+  // Fast read-only pre-check to skip external translate/IPA calls on obvious duplicates
+  const existingPre = findRowByWord(getOrCreateSheet(lang), word);
+  if (existingPre) {
     return {
       duplicate: true,
-      data: rowToObject(existing.values),
+      data: rowToObject(existingPre.values),
     };
   }
 
@@ -77,38 +80,49 @@ function handleAddWord(lang, payload) {
   if (!phonetic) {
     phonetic = fetchPhonetic(word, lang);
   }
-  const nowIso = new Date().toISOString();
-  const todayStr = getTodayDateString();
 
-  const newRecord = {
-    id: Utilities.getUuid(),
-    word: word,
-    meaning: meaning,
-    context: context,
-    sourceUrl: sourceUrl,
-    createdAt: nowIso,
-    repetition: DEFAULT_SM2.repetition,
-    interval: DEFAULT_SM2.interval,
-    easeFactor: DEFAULT_SM2.easeFactor,
-    nextReviewDate: payload.nextReviewDate
-      ? formatDateOnly(payload.nextReviewDate)
-      : todayStr,
-    lastReviewedAt: "",
-    phonetic: phonetic,
-  };
+  return withScriptLock(function () {
+    const sheet = getOrCreateSheet(lang);
+    const existing = findRowByWord(sheet, word);
+    if (existing) {
+      return {
+        duplicate: true,
+        data: rowToObject(existing.values),
+      };
+    }
 
-  const nextRow = sheet.getLastRow() + 1;
-  const rowValues = objectToRow(newRecord);
+    const nowIso = new Date().toISOString();
+    const todayStr = getTodayDateString();
 
-  // Format date/string columns as plain text so Sheets won't coerce YYYY-MM-DD into a Date serial
-  const range = sheet.getRange(nextRow, 1, 1, SHEET_HEADERS.length);
-  range.setValues([rowValues]);
-  formatDateColumnsAsText(sheet, nextRow, true);
+    const newRecord = {
+      id: Utilities.getUuid(),
+      word: word,
+      meaning: meaning,
+      context: context,
+      sourceUrl: sourceUrl,
+      createdAt: nowIso,
+      repetition: DEFAULT_SM2.repetition,
+      interval: DEFAULT_SM2.interval,
+      easeFactor: DEFAULT_SM2.easeFactor,
+      nextReviewDate: payload.nextReviewDate
+        ? formatDateOnly(payload.nextReviewDate)
+        : todayStr,
+      lastReviewedAt: "",
+      phonetic: phonetic,
+    };
 
-  return {
-    duplicate: false,
-    data: newRecord,
-  };
+    const nextRow = sheet.getLastRow() + 1;
+    const rowValues = objectToRow(newRecord);
+
+    // Format date/string columns as plain text BEFORE setValues so Sheets won't coerce YYYY-MM-DD into a Date serial
+    formatDateColumnsAsText(sheet, nextRow, true);
+    sheet.getRange(nextRow, 1, 1, SHEET_HEADERS.length).setValues([rowValues]);
+
+    return {
+      duplicate: false,
+      data: newRecord,
+    };
+  });
 }
 
 /**
@@ -176,9 +190,19 @@ function handleUpdateReview(lang, payload) {
     phonetic: current.phonetic,
   };
 
-  const range = sheet.getRange(match.rowIndex, 1, 1, SHEET_HEADERS.length);
-  range.setValues([objectToRow(updated)]);
+  // Format date columns (J:K) BEFORE writing and update only SM-2 columns (G:K)
   formatDateColumnsAsText(sheet, match.rowIndex, false);
+  sheet
+    .getRange(match.rowIndex, 7, 1, 5)
+    .setValues([
+      [
+        updated.repetition,
+        updated.interval,
+        updated.easeFactor,
+        updated.nextReviewDate,
+        updated.lastReviewedAt,
+      ],
+    ]);
 
   return updated;
 }
@@ -207,9 +231,12 @@ function handleEditWord(lang, payload) {
     throw new Error('Field "word" cannot be empty.');
   }
 
-  const duplicateMatch = findRowByWord(sheet, updatedWord, id);
-  if (duplicateMatch) {
-    throw new Error('Word "' + updatedWord + '" already exists.');
+  // Only scan column B for duplicates if the canonical word text actually changed
+  if (normalizeWordKey(updatedWord) !== normalizeWordKey(current.word)) {
+    const duplicateMatch = findRowByWord(sheet, updatedWord, id);
+    if (duplicateMatch) {
+      throw new Error('Word "' + updatedWord + '" already exists.');
+    }
   }
 
   let updatedMeaning =
@@ -245,9 +272,15 @@ function handleEditWord(lang, payload) {
         : current.phonetic,
   };
 
+  // Write only editable content columns (B:E and L if changed), leaving date & SM-2 columns untouched
   sheet
-    .getRange(match.rowIndex, 1, 1, SHEET_HEADERS.length)
-    .setValues([objectToRow(updated)]);
+    .getRange(match.rowIndex, 2, 1, 4)
+    .setValues([
+      [updated.word, updated.meaning, updated.context, updated.sourceUrl],
+    ]);
+  if (updated.phonetic !== current.phonetic) {
+    sheet.getRange(match.rowIndex, 12).setValue(updated.phonetic);
+  }
   return updated;
 }
 

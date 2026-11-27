@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { getTranslations } from '../utils/i18n';
 import {
   analyzeIpaStress,
@@ -8,52 +8,130 @@ import {
   tokenizeIpaForDisplay,
 } from '../utils/phonetics';
 
-export default function PhoneticBadge({
+const lazyCallbacks = new WeakMap();
+let sharedLazyObserver = null;
+
+function getSharedLazyObserver() {
+  if (typeof IntersectionObserver === 'undefined') return null;
+  if (!sharedLazyObserver) {
+    sharedLazyObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const cb = lazyCallbacks.get(entry.target);
+          sharedLazyObserver.unobserve(entry.target);
+          lazyCallbacks.delete(entry.target);
+          cb?.();
+        }
+      },
+      { rootMargin: '200px 0px' }
+    );
+  }
+  return sharedLazyObserver;
+}
+
+const PhoneticBadge = memo(function PhoneticBadge({
   word,
   phonetic = '',
   lang = 'English',
   uiLang = 'vi',
   size = 'md', // 'sm' | 'md' | 'lg'
   showStressPill = true,
+  lazy = false,
   className = '',
 }) {
   const explicitIpa = useMemo(() => normalizeIpaString(phonetic), [phonetic]);
-  const [resolvedIpa, setResolvedIpa] = useState(() => {
-    if (explicitIpa) return explicitIpa;
-    const cached = getCachedPhonetic(word, lang);
-    return cached || '';
-  });
+  const initialCached = explicitIpa
+    ? explicitIpa
+    : getCachedPhonetic(word, lang);
+
+  const [resolvedIpa, setResolvedIpa] = useState(() => initialCached || '');
+  const [canFetch, setCanFetch] = useState(
+    () => !lazy || Boolean(explicitIpa) || initialCached !== undefined
+  );
+  const [fetchDone, setFetchDone] = useState(
+    () => Boolean(explicitIpa) || initialCached !== undefined
+  );
+  const probeRef = useRef(null);
 
   useEffect(() => {
     if (explicitIpa) {
       setResolvedIpa(explicitIpa);
+      setCanFetch(true);
+      setFetchDone(true);
       return;
     }
 
     const cached = getCachedPhonetic(word, lang);
     if (cached !== undefined) {
       setResolvedIpa(cached);
+      setCanFetch(true);
+      setFetchDone(true);
       return;
     }
 
     setResolvedIpa('');
+    setFetchDone(false);
+    setCanFetch(!lazy);
+  }, [word, explicitIpa, lang, lazy]);
+
+  useEffect(() => {
+    if (!lazy || canFetch) return;
+    const el = probeRef.current;
+    const observer = getSharedLazyObserver();
+    if (!el || !observer) {
+      setCanFetch(true);
+      return;
+    }
+
+    lazyCallbacks.set(el, () => setCanFetch(true));
+    observer.observe(el);
+
+    return () => {
+      observer.unobserve(el);
+      lazyCallbacks.delete(el);
+    };
+  }, [lazy, canFetch, word, lang]);
+
+  useEffect(() => {
+    if (!canFetch || explicitIpa) return;
+
+    const cached = getCachedPhonetic(word, lang);
+    if (cached !== undefined) {
+      setResolvedIpa(cached);
+      setFetchDone(true);
+      return;
+    }
+
     let cancelled = false;
     fetchPhonetic(word, lang).then((ipa) => {
       if (!cancelled) {
         setResolvedIpa(ipa || '');
+        setFetchDone(true);
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [word, explicitIpa, lang]);
+  }, [canFetch, word, explicitIpa, lang]);
 
   const activeIpa = explicitIpa || resolvedIpa;
   const analysis = useMemo(() => analyzeIpaStress(activeIpa), [activeIpa]);
   const tokens = useMemo(() => tokenizeIpaForDisplay(activeIpa), [activeIpa]);
 
-  if (!activeIpa) return null;
+  if (!activeIpa) {
+    if (lazy && !canFetch && !fetchDone) {
+      return (
+        <span
+          ref={probeRef}
+          className="inline-block h-2 w-1 align-middle"
+          aria-hidden="true"
+        />
+      );
+    }
+    return null;
+  }
 
   const t = getTranslations(uiLang).phonetic;
 
@@ -112,4 +190,6 @@ export default function PhoneticBadge({
       )}
     </span>
   );
-}
+});
+
+export default PhoneticBadge;
