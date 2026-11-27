@@ -115,12 +115,13 @@ function doPost(e) {
 
     switch (action) {
       case "ADD_WORD": {
-        const created = handleAddWord(lang, payload);
+        const result = handleAddWord(lang, payload);
         return jsonResponse({
           success: true,
           action: action,
           lang: lang,
-          data: created,
+          duplicate: result.duplicate,
+          data: result.data,
         });
       }
 
@@ -211,12 +212,21 @@ function handleGetWords(lang, dueOnly) {
 
 /**
  * Add a new vocabulary word with auto EN->VI translation (if meaning is empty)
- * and default SM-2 values.
+ * and default SM-2 values. Skips inserting if an identical word (after trim) already exists.
  */
 function handleAddWord(lang, payload) {
-  const word = String(payload.word || "").trim();
+  const word = cleanWordText(payload.word);
   if (!word) {
     throw new Error('Field "word" is required.');
+  }
+
+  const sheet = getOrCreateSheet(lang);
+  const existing = findRowByWord(sheet, word);
+  if (existing) {
+    return {
+      duplicate: true,
+      data: rowToObject(existing.values),
+    };
   }
 
   let meaning =
@@ -257,7 +267,6 @@ function handleAddWord(lang, payload) {
     phonetic: phonetic,
   };
 
-  const sheet = getOrCreateSheet(lang);
   const nextRow = sheet.getLastRow() + 1;
   const rowValues = objectToRow(newRecord);
 
@@ -268,7 +277,10 @@ function handleAddWord(lang, payload) {
   sheet.getRange(nextRow, 10).setNumberFormat("@"); // nextReviewDate
   sheet.getRange(nextRow, 11).setNumberFormat("@"); // lastReviewedAt
 
-  return newRecord;
+  return {
+    duplicate: false,
+    data: newRecord,
+  };
 }
 
 /**
@@ -361,9 +373,16 @@ function handleEditWord(lang, payload) {
 
   const current = rowToObject(match.values);
   const updatedWord =
-    payload.word !== undefined ? String(payload.word).trim() : current.word;
+    payload.word !== undefined
+      ? cleanWordText(payload.word)
+      : cleanWordText(current.word);
   if (!updatedWord) {
     throw new Error('Field "word" cannot be empty.');
+  }
+
+  const duplicateMatch = findRowByWord(sheet, updatedWord, id);
+  if (duplicateMatch) {
+    throw new Error('Word "' + updatedWord + '" already exists.');
   }
 
   let updatedMeaning =
@@ -491,6 +510,57 @@ function findRowById(sheet, id) {
 }
 
 /**
+ * Strip invisible zero-width chars, collapse internal whitespace, and trim both ends.
+ */
+function cleanWordText(raw) {
+  return String(raw || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Canonical comparison key for checking 100% duplicate words (trimmed & case-insensitive).
+ */
+function normalizeWordKey(raw) {
+  return cleanWordText(raw).toLowerCase();
+}
+
+/**
+ * Find an existing row matching `word` (after trimming & whitespace normalization, case-insensitive).
+ * Optionally skips `excludeId` when validating inline edits.
+ * Returns { rowIndex (1-based), values } or null.
+ */
+function findRowByWord(sheet, word, excludeId) {
+  const targetKey = normalizeWordKey(word);
+  if (!targetKey) {
+    return null;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    return null;
+  }
+
+  const values = sheet
+    .getRange(2, 1, lastRow - 1, SHEET_HEADERS.length)
+    .getValues();
+  for (let i = 0; i < values.length; i++) {
+    const rowId = String(values[i][0] || "").trim();
+    if (excludeId && rowId === excludeId) {
+      continue;
+    }
+    if (normalizeWordKey(values[i][1]) === targetKey) {
+      return {
+        rowIndex: i + 2,
+        values: values[i],
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Auto-translate text using Google Apps Script LanguageApp (EN -> VI for English).
  */
 function translateWord(text, lang) {
@@ -604,8 +674,8 @@ function calculateSm2(current, quality) {
 
 function rowToObject(row) {
   return {
-    id: String(row[0] || ""),
-    word: String(row[1] || ""),
+    id: String(row[0] || "").trim(),
+    word: cleanWordText(row[1]),
     meaning: String(row[2] || ""),
     context: String(row[3] || ""),
     sourceUrl: String(row[4] || ""),

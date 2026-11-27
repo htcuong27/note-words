@@ -18,6 +18,18 @@ const CACHE_STORAGE_KEYS = [
 ];
 
 let inflightDueSync = null;
+const inflightWordSaves = new Map();
+
+function cleanWordText(raw) {
+  return String(raw || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeWordKey(raw) {
+  return cleanWordText(raw).toLowerCase();
+}
 
 function getTodayDateString() {
   const now = new Date();
@@ -174,7 +186,7 @@ async function handleSaveWord(payload) {
     };
   }
 
-  const word = String(payload?.word || '').trim();
+  const word = cleanWordText(payload?.word);
   if (!word) {
     return {
       ok: false,
@@ -189,90 +201,108 @@ async function handleSaveWord(payload) {
     String(payload?.lang || stored.NOTE_WORD_LANG || DEFAULT_SHEET_LANG).trim() ||
     DEFAULT_SHEET_LANG;
 
-  const response = await fetch(gasUrl, {
-    method: 'POST',
-    redirect: 'follow',
-    credentials: 'omit',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8',
-    },
-    body: JSON.stringify({
-      action: 'ADD_WORD',
-      lang,
-      word,
-      context: String(payload?.context || '').trim(),
-      sourceUrl: String(payload?.sourceUrl || '').trim(),
-    }),
-  });
-
-  if (!response.ok) {
-    return {
-      ok: false,
-      error:
-        uiLang === 'en'
-          ? `Google Apps Script returned HTTP ${response.status}.`
-          : `Google Apps Script trả về lỗi HTTP ${response.status}.`,
-    };
+  const wordKey = normalizeWordKey(word);
+  const saveLockKey = `${buildCacheKey(gasUrl, lang)}::${wordKey}`;
+  if (inflightWordSaves.has(saveLockKey)) {
+    return await inflightWordSaves.get(saveLockKey);
   }
 
-  let json;
-  try {
-    json = await response.json();
-  } catch {
-    return {
-      ok: false,
-      error:
-        uiLang === 'en'
-          ? 'Invalid JSON response from GAS. Please check your Web App URL.'
-          : 'Phản hồi từ GAS không phải JSON hợp lệ. Kiểm tra lại URL Web App.',
-    };
-  }
+  const savePromise = (async () => {
+    const response = await fetch(gasUrl, {
+      method: 'POST',
+      redirect: 'follow',
+      credentials: 'omit',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify({
+        action: 'ADD_WORD',
+        lang,
+        word,
+        context: String(payload?.context || '').trim(),
+        sourceUrl: String(payload?.sourceUrl || '').trim(),
+      }),
+    });
 
-  if (json && json.success === false) {
-    return {
-      ok: false,
-      duplicate: Boolean(json.duplicate),
-      error:
-        json.error ||
-        (uiLang === 'en'
-          ? 'Could not save word to Google Sheets.'
-          : 'Không thể lưu từ lên Google Sheets.'),
-    };
-  }
+    if (!response.ok) {
+      return {
+        ok: false,
+        error:
+          uiLang === 'en'
+            ? `Google Apps Script returned HTTP ${response.status}.`
+            : `Google Apps Script trả về lỗi HTTP ${response.status}.`,
+      };
+    }
 
-  // Update due words cache directly when possible to avoid an extra GAS GET call
-  const savedItem = json ? json.data : null;
-  if (!json?.duplicate && savedItem) {
-    const cacheKey = buildCacheKey(gasUrl, lang);
-    const todayStr = getTodayDateString();
-    const cached = await chrome.storage.local.get(CACHE_STORAGE_KEYS);
+    let json;
+    try {
+      json = await response.json();
+    } catch {
+      return {
+        ok: false,
+        error:
+          uiLang === 'en'
+            ? 'Invalid JSON response from GAS. Please check your Web App URL.'
+            : 'Phản hồi từ GAS không phải JSON hợp lệ. Kiểm tra lại URL Web App.',
+      };
+    }
 
-    if (
-      cached.CACHED_DUE_KEY === cacheKey &&
-      cached.CACHED_DUE_DATE === todayStr &&
-      Array.isArray(cached.CACHED_DUE_WORDS)
-    ) {
-      const exists = cached.CACHED_DUE_WORDS.some((w) => w.id === savedItem.id);
-      const nextWords = exists
-        ? cached.CACHED_DUE_WORDS
-        : [...cached.CACHED_DUE_WORDS, savedItem];
-      await chrome.storage.local.set({
-        CACHED_DUE_WORDS: nextWords,
-        CACHED_DUE_UPDATED_AT: Date.now(),
-      });
-      await applyBadgeCount(nextWords.length);
-    } else {
+    if (json && json.success === false) {
+      return {
+        ok: false,
+        duplicate: Boolean(json.duplicate),
+        error:
+          json.error ||
+          (uiLang === 'en'
+            ? 'Could not save word to Google Sheets.'
+            : 'Không thể lưu từ lên Google Sheets.'),
+      };
+    }
+
+    // Update due words cache directly when possible to avoid an extra GAS GET call
+    const savedItem = json ? json.data : null;
+    if (!json?.duplicate && savedItem) {
+      const cacheKey = buildCacheKey(gasUrl, lang);
+      const todayStr = getTodayDateString();
+      const cached = await chrome.storage.local.get(CACHE_STORAGE_KEYS);
+
+      if (
+        cached.CACHED_DUE_KEY === cacheKey &&
+        cached.CACHED_DUE_DATE === todayStr &&
+        Array.isArray(cached.CACHED_DUE_WORDS)
+      ) {
+        const savedKey = normalizeWordKey(savedItem.word);
+        const exists = cached.CACHED_DUE_WORDS.some(
+          (w) => w.id === savedItem.id || normalizeWordKey(w.word) === savedKey
+        );
+        const nextWords = exists
+          ? cached.CACHED_DUE_WORDS
+          : [...cached.CACHED_DUE_WORDS, savedItem];
+        await chrome.storage.local.set({
+          CACHED_DUE_WORDS: nextWords,
+          CACHED_DUE_UPDATED_AT: Date.now(),
+        });
+        await applyBadgeCount(nextWords.length);
+      } else {
+        await fetchAndSyncDueWords({ force: true });
+      }
+    } else if (!json?.duplicate) {
       await fetchAndSyncDueWords({ force: true });
     }
-  } else if (!json?.duplicate) {
-    await fetchAndSyncDueWords({ force: true });
-  }
 
-  return {
-    ok: true,
-    duplicate: Boolean(json && json.duplicate),
-    data: savedItem,
-  };
+    return {
+      ok: true,
+      duplicate: Boolean(json && json.duplicate),
+      data: savedItem,
+    };
+  })();
+
+  inflightWordSaves.set(saveLockKey, savePromise);
+  try {
+    return await savePromise;
+  } finally {
+    inflightWordSaves.delete(saveLockKey);
+  }
 }
 
 chrome.runtime.onInstalled.addListener(async () => {

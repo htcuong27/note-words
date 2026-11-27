@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw, Search } from 'lucide-react';
 import WordTable from '../components/WordTable';
 import {
+  cleanWordText,
   deleteWord,
   editWord,
   getWords,
   getWordsCacheMeta,
+  normalizeWordKey,
 } from '../utils/api';
 import { isWordDue } from '../utils/sm2';
 import { formatCacheAge, getTranslations } from '../utils/i18n';
@@ -82,10 +84,21 @@ export default function VocabularyListPage({
 
   const handleSaveEdit = async ({ id, word, phonetic, meaning, context }) => {
     setActionError('');
+    const cleanedWord = cleanWordText(word);
+    const targetKey = normalizeWordKey(cleanedWord);
+    const hasDuplicate = words.some(
+      (item) => item.id !== id && normalizeWordKey(item.word) === targetKey
+    );
+    if (hasDuplicate) {
+      const msg = t.duplicateErr(cleanedWord);
+      setActionError(msg);
+      throw new Error(msg);
+    }
+
     try {
       const updated = await editWord({
         id,
-        word,
+        word: cleanedWord,
         phonetic,
         meaning,
         context,

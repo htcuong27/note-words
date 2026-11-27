@@ -589,16 +589,20 @@
 
       if (response.ok) {
         if (response.duplicate) {
-          showToast(copy.duplicate(payloadToSend.word), 'warning');
+          const matchedWord = String(response.data?.word || payloadToSend.word).trim();
+          showToast(copy.duplicate(matchedWord), 'warning');
         } else {
+          const savedWord = String(response.data?.word || payloadToSend.word).trim();
           const phonetic = response.data?.phonetic
             ? ` ${response.data.phonetic}`
             : '';
           const meaning = response.data?.meaning
             ? ` → ${response.data.meaning}`
             : '';
-          showToast(copy.saved(payloadToSend.word, `${phonetic}${meaning}`), 'success');
+          showToast(copy.saved(savedWord, `${phonetic}${meaning}`), 'success');
         }
+      } else if (response.duplicate) {
+        showToast(copy.duplicate(payloadToSend.word), 'warning');
       } else if (response.code === 'MISSING_URL') {
         showToast(copy.missingUrl, 'warning');
       } else {
@@ -627,7 +631,11 @@
         return;
       }
 
-      const word = selection.toString().replace(/\s+/g, ' ').trim();
+      const word = selection
+        .toString()
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (!word || word.length > MAX_WORD_LENGTH || !/[a-zA-Z]/.test(word)) {
         hideButton();
         return;

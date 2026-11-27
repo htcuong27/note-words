@@ -119,6 +119,7 @@ export const I18N = {
       filterAll: (n) => `Tất cả (${n})`,
       filterDue: (n) => `Cần học (${n})`,
       editErr: (m) => `Lỗi cập nhật từ: ${m}`,
+      duplicateErr: (w) => `Từ "${w}" đã tồn tại trong danh sách.`,
       deleteErr: (m) => `Lỗi xóa từ: ${m}`,
       loadErr: 'Không thể tải danh sách từ vựng.',
       noApiPrompt:
@@ -288,6 +289,7 @@ export const I18N = {
       filterAll: (n) => `All (${n})`,
       filterDue: (n) => `Due (${n})`,
       editErr: (m) => `Failed to update word: ${m}`,
+      duplicateErr: (w) => `"${w}" is already in your vocabulary list.`,
       deleteErr: (m) => `Failed to delete word: ${m}`,
       loadErr: 'Could not load vocabulary list.',
       noApiPrompt:

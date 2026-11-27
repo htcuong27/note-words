@@ -63,7 +63,7 @@ export default function WordTable({
     try {
       await onSaveEdit({
         id,
-        word: draft.word.trim(),
+        word: draft.word.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim(),
         phonetic: draft.phonetic.trim(),
         meaning: draft.meaning.trim(),
         context: draft.context.trim(),

@@ -21,6 +21,17 @@ export const DEFAULT_UI_LANG = 'vi';
 
 const inflightRequests = new Map();
 
+export function cleanWordText(raw) {
+  return String(raw || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function normalizeWordKey(raw) {
+  return cleanWordText(raw).toLowerCase();
+}
+
 function normalizeApiUrl(url) {
   const trimmed = String(url || '').trim();
   if (!trimmed) return '';
@@ -297,22 +308,33 @@ export async function addWord({
   lang = getCurrentLang(),
 }) {
   const baseUrl = requireApiUrl();
+  const cleanedWord = cleanWordText(word);
+  if (!cleanedWord) {
+    const isEn = getUiLang() === 'en';
+    throw new Error(isEn ? 'Word cannot be empty.' : 'Từ vựng không được để trống.');
+  }
+
   const json = await postGas(
     {
       action: 'ADD_WORD',
       lang,
-      word,
-      meaning,
-      context,
-      sourceUrl,
-      phonetic,
+      word: cleanedWord,
+      meaning: String(meaning || '').trim(),
+      context: String(context || '').trim(),
+      sourceUrl: String(sourceUrl || '').trim(),
+      phonetic: String(phonetic || '').trim(),
     },
     baseUrl
   );
-  if (json.data) {
+  if (json.data && !json.duplicate) {
     const cacheKey = buildCacheKey(baseUrl, lang);
+    const savedKey = normalizeWordKey(json.data.word);
     mutateWordsCache(cacheKey, (words) =>
-      words.some((item) => item.id === json.data.id) ? words : [...words, json.data]
+      words.some(
+        (item) => item.id === json.data.id || normalizeWordKey(item.word) === savedKey
+      )
+        ? words
+        : [...words, json.data]
     );
   }
   return json.data;
@@ -368,12 +390,13 @@ export async function editWord({
   lang = getCurrentLang(),
 }) {
   const baseUrl = requireApiUrl();
+  const cleanedWord = word !== undefined ? cleanWordText(word) : undefined;
   const json = await postGas(
     {
       action: 'EDIT_WORD',
       lang,
       id,
-      word,
+      word: cleanedWord,
       meaning,
       context,
       sourceUrl,
