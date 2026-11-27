@@ -78,6 +78,20 @@ Desktop.ini
 *.sln
 *.sw?
 
-# Local AI / Workflow session state
+# Local AI / Coding Agents & Workflow state
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+GEMINI.md
+.gemini/
+.cursor/
+.cursorrules
+.cursorignore
+.agents/
+.agent/
+.windsurf/
+.windsurfrules
+.aider*
 .brain/
 graphify-out/
