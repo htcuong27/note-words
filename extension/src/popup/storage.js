@@ -28,12 +28,14 @@ export async function loadSyncSettings() {
       'GAS_WEB_APP_URL',
       'NOTE_WORD_LANG',
       'UI_LANG',
+      'UI_LANG_UPDATED_AT',
     ]);
   }
   return {
     GAS_WEB_APP_URL: localStorage.getItem('GAS_WEB_APP_URL') || '',
     NOTE_WORD_LANG: DEFAULT_SHEET_LANG,
     UI_LANG: localStorage.getItem('UI_LANG') || 'vi',
+    UI_LANG_UPDATED_AT: Number(localStorage.getItem('UI_LANG_UPDATED_AT')) || 0,
   };
 }
 
@@ -49,6 +51,12 @@ export async function saveSyncSettings(values) {
     }
     if (values.UI_LANG !== undefined) {
       localStorage.setItem('UI_LANG', values.UI_LANG);
+    }
+    if (values.UI_LANG_UPDATED_AT !== undefined) {
+      localStorage.setItem(
+        'UI_LANG_UPDATED_AT',
+        String(values.UI_LANG_UPDATED_AT)
+      );
     }
   }
 }

@@ -15,6 +15,7 @@ import {
   isEditableTarget,
 } from './contextExtractor';
 import { createShadowUi } from './shadowUi';
+import { createWebBridge } from './webBridge';
 
 (function initNoteWordsContentScript() {
   if (window.__NOTEWORDS_CONTENT_LOADED__) return;
@@ -26,6 +27,7 @@ import { createShadowUi } from './shadowUi';
   let selectionTimer = null;
 
   const t = () => getContentCopy(uiLang);
+  const webBridge = createWebBridge();
 
   const ui = createShadowUi({
     getCopy: t,
@@ -69,6 +71,10 @@ import { createShadowUi } from './shadowUi';
       if (areaName === 'sync' && changes.UI_LANG) {
         uiLang = changes.UI_LANG.newValue === 'en' ? 'en' : 'vi';
         ui.updateLabels(isSaving);
+        webBridge.notifyUiLangChanged(
+          uiLang,
+          changes.UI_LANG_UPDATED_AT?.newValue || Date.now()
+        );
       }
     });
   }

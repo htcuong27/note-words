@@ -305,6 +305,61 @@ async function handleSaveWord(payload) {
   }
 }
 
+async function handleSyncDueWordsFromWeb(payload) {
+  try {
+    const stored = await chrome.storage.sync.get([
+      'GAS_WEB_APP_URL',
+      'NOTE_WORD_LANG',
+    ]);
+    const extGasUrl = normalizeGasUrl(stored.GAS_WEB_APP_URL);
+    const extSheetLang =
+      String(stored.NOTE_WORD_LANG || DEFAULT_SHEET_LANG).trim() ||
+      DEFAULT_SHEET_LANG;
+
+    if (!extGasUrl) {
+      return { ok: false, code: 'MISSING_URL' };
+    }
+
+    const webGasUrl = normalizeGasUrl(payload?.gasUrl);
+    const webSheetLang =
+      String(payload?.sheetLang || DEFAULT_SHEET_LANG).trim() ||
+      DEFAULT_SHEET_LANG;
+
+    const matchesConfig =
+      (!webGasUrl || webGasUrl === extGasUrl) &&
+      webSheetLang === extSheetLang;
+
+    if (!matchesConfig) {
+      return { ok: true, skipped: true };
+    }
+
+    if (Array.isArray(payload?.dueWords)) {
+      const cacheKey = buildCacheKey(extGasUrl, extSheetLang);
+      const todayStr = getTodayDateString();
+      const updatedAt = Date.now();
+      await chrome.storage.local.set({
+        CACHED_DUE_WORDS: payload.dueWords,
+        CACHED_DUE_UPDATED_AT: updatedAt,
+        CACHED_DUE_KEY: cacheKey,
+        CACHED_DUE_DATE: todayStr,
+      });
+      await applyBadgeCount(payload.dueWords.length);
+      return {
+        ok: true,
+        count: payload.dueWords.length,
+        updatedAt,
+      };
+    }
+
+    return await fetchAndSyncDueWords({ force: true });
+  } catch (err) {
+    return {
+      ok: false,
+      error: err?.message || 'Sync error',
+    };
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 15 });
   await fetchAndSyncDueWords({ force: false });
@@ -361,6 +416,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async () => {
       await applyBadgeCount(message.count);
       sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (message.type === 'SYNC_DUE_WORDS_FROM_WEB') {
+    (async () => {
+      const result = await handleSyncDueWordsFromWeb(message.payload || {});
+      sendResponse(result);
     })();
     return true;
   }

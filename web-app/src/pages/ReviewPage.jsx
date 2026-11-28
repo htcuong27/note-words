@@ -14,11 +14,13 @@ import {
 } from '../components/review/ReviewStatusStates';
 import { useReviewShortcuts } from '../hooks/useReviewShortcuts';
 import {
+  getCachedDueWords,
   getWords,
   getWordsCacheMeta,
   patchCachedWord,
   updateReview,
 } from '../utils/api';
+import { notifyExtensionReviewUpdated } from '../utils/extensionBridge';
 import { RATING, calculateSM2 } from '../utils/sm2';
 import { getTranslations } from '../utils/i18n';
 import { fetchPhonetic } from '../utils/phonetics';
@@ -59,6 +61,20 @@ export default function ReviewPage({
     setPracticePassed(false);
   }, []);
 
+  const syncExtensionDueWords = useCallback(
+    ({ forceRefresh = false } = {}) => {
+      if (!apiUrl) return;
+      const dueWords = getCachedDueWords({ lang: currentLang, url: apiUrl });
+      notifyExtensionReviewUpdated({
+        gasUrl: apiUrl,
+        sheetLang: currentLang,
+        dueWords,
+        forceRefresh: forceRefresh || dueWords === null,
+      });
+    },
+    [apiUrl, currentLang]
+  );
+
   const loadCards = useCallback(
     async (targetDueOnly = dueOnly, { forceRefresh = false } = {}) => {
       if (!apiUrl) {
@@ -89,6 +105,7 @@ export default function ReviewPage({
         setReviewedCount(0);
         const meta = getWordsCacheMeta({ lang: currentLang });
         setLastSyncedAt(meta?.updatedAt || Date.now());
+        syncExtensionDueWords();
       } catch (err) {
         setError(err.message || loadErrorRef.current);
         setQueue([]);
@@ -96,12 +113,25 @@ export default function ReviewPage({
         setLoading(false);
       }
     },
-    [apiUrl, currentLang, dueOnly, resetCardPractice]
+    [apiUrl, currentLang, dueOnly, resetCardPractice, syncExtensionDueWords]
   );
 
   useEffect(() => {
     loadCards(dueOnly);
   }, [loadCards, dueOnly]);
+
+  // Notify extension when a review session finishes and all GAS syncs have settled
+  const sessionCompletedNotifiedRef = useRef(false);
+  useEffect(() => {
+    if (reviewedCount === 0 || queue.length > 0) {
+      sessionCompletedNotifiedRef.current = false;
+      return;
+    }
+    if (!loading && pendingSyncs === 0 && !sessionCompletedNotifiedRef.current) {
+      sessionCompletedNotifiedRef.current = true;
+      syncExtensionDueWords();
+    }
+  }, [reviewedCount, queue.length, loading, pendingSyncs, syncExtensionDueWords]);
 
   // Warn before closing tab if review syncs are still in flight
   useEffect(() => {
@@ -220,6 +250,7 @@ export default function ReviewPage({
         patch: sm2Patch,
         lang: currentLang,
       });
+      syncExtensionDueWords();
 
       resetCardPractice();
       setReviewedCount((prev) => prev + 1);
@@ -248,6 +279,9 @@ export default function ReviewPage({
         quality,
         lang: currentLang,
       })
+        .then(() => {
+          syncExtensionDueWords();
+        })
         .catch((err) => {
           setSyncError(t.syncError(currentCard.word, err.message));
         })
@@ -255,7 +289,7 @@ export default function ReviewPage({
           setPendingSyncs((c) => Math.max(0, c - 1));
         });
     },
-    [currentCard, currentLang, resetCardPractice, t]
+    [currentCard, currentLang, resetCardPractice, syncExtensionDueWords, t]
   );
 
   useReviewShortcuts({

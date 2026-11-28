@@ -11,6 +11,7 @@ export const STORAGE_KEYS = {
   GAS_URL: 'GAS_WEB_APP_URL',
   LANG: 'NOTE_WORD_LANG',
   UI_LANG: 'NOTE_WORD_UI_LANG',
+  UI_LANG_UPDATED_AT: 'NOTE_WORD_UI_LANG_UPDATED_AT',
   WORDS_CACHE: 'NOTE_WORD_WORDS_CACHE_V1',
 };
 
@@ -141,6 +142,14 @@ export function patchCachedWord({ id, patch, lang = getCurrentLang(), url } = {}
   );
 }
 
+export function getCachedDueWords({ lang = getCurrentLang(), url } = {}) {
+  const baseUrl = url !== undefined ? String(url).trim() : getApiUrl();
+  if (!baseUrl) return null;
+  const entry = readWordsCache(buildCacheKey(baseUrl, lang));
+  if (!entry) return null;
+  return entry.words.filter((w) => isWordDue(w));
+}
+
 export function clearWordsCache() {
   memoryWordsCache = {};
   try {
@@ -199,10 +208,29 @@ export function getUiLang() {
   }
 }
 
-export function setUiLang(lang) {
+export function hasStoredUiLang() {
+  try {
+    const val = (localStorage.getItem(STORAGE_KEYS.UI_LANG) || '').trim();
+    return val === 'en' || val === 'vi';
+  } catch {
+    return false;
+  }
+}
+
+export function getUiLangUpdatedAt() {
+  try {
+    return Number(localStorage.getItem(STORAGE_KEYS.UI_LANG_UPDATED_AT)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setUiLang(lang, updatedAt = Date.now()) {
   const normalized = lang === 'en' ? 'en' : 'vi';
+  const ts = Number(updatedAt) || Date.now();
   try {
     localStorage.setItem(STORAGE_KEYS.UI_LANG, normalized);
+    localStorage.setItem(STORAGE_KEYS.UI_LANG_UPDATED_AT, String(ts));
   } catch {
     // Ignore storage errors
   }

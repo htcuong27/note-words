@@ -160,10 +160,35 @@ export default function Popup() {
     [sheetLang]
   );
 
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return;
+
+    const handleStorageChange = (changes, areaName) => {
+      if (areaName === 'sync' && changes.UI_LANG) {
+        setUiLang(changes.UI_LANG.newValue === 'en' ? 'en' : 'vi');
+      }
+      if (areaName === 'local' && changes.CACHED_DUE_WORDS) {
+        const nextWords = Array.isArray(changes.CACHED_DUE_WORDS.newValue)
+          ? changes.CACHED_DUE_WORDS.newValue
+          : [];
+        setDueWords(nextWords);
+        setLastUpdatedAt(
+          Number(changes.CACHED_DUE_UPDATED_AT?.newValue) || Date.now()
+        );
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
+
   const handleChangeUiLang = useCallback(async (nextLang) => {
     const normalized = nextLang === 'en' ? 'en' : 'vi';
     setUiLang(normalized);
-    await saveSyncSettings({ UI_LANG: normalized });
+    await saveSyncSettings({
+      UI_LANG: normalized,
+      UI_LANG_UPDATED_AT: Date.now(),
+    });
   }, []);
 
   const toggleWordReveal = useCallback((id) => {

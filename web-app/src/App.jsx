@@ -6,13 +6,21 @@ import ReviewPage from './pages/ReviewPage';
 const VocabularyListPage = lazy(() => import('./pages/VocabularyListPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 import {
+  STORAGE_KEYS,
   getApiUrl,
   getCurrentLang,
   getUiLang,
+  getUiLangUpdatedAt,
+  hasStoredUiLang,
   setApiUrl,
   setCurrentLang,
   setUiLang,
 } from './utils/api';
+import {
+  notifyExtensionUiLang,
+  requestExtensionUiLang,
+  subscribeExtensionUiLang,
+} from './utils/extensionBridge';
 import { getTranslations } from './utils/i18n';
 
 export default function App() {
@@ -25,9 +33,54 @@ export default function App() {
     document.documentElement.lang = uiLang;
   }, [uiLang]);
 
+  // Bidirectional UI language sync with Chrome Extension and other Web App tabs
+  useEffect(() => {
+    const unsubscribeExt = subscribeExtensionUiLang({
+      onState: ({ uiLang: extLang, updatedAt: extUpdatedAt, hasStoredValue }) => {
+        const webHasStored = hasStoredUiLang();
+        const webLang = getUiLang();
+        const webUpdatedAt = getUiLangUpdatedAt();
+
+        if (hasStoredValue && !webHasStored) {
+          const saved = setUiLang(extLang, extUpdatedAt || Date.now());
+          setUiLangState(saved);
+        } else if (!hasStoredValue && webHasStored) {
+          notifyExtensionUiLang(webLang, webUpdatedAt || Date.now());
+        } else if (hasStoredValue && webHasStored && extLang !== webLang) {
+          if (extUpdatedAt >= webUpdatedAt) {
+            const saved = setUiLang(extLang, extUpdatedAt || Date.now());
+            setUiLangState(saved);
+          } else {
+            notifyExtensionUiLang(webLang, webUpdatedAt);
+          }
+        }
+      },
+      onChanged: ({ uiLang: extLang, updatedAt: extUpdatedAt }) => {
+        const saved = setUiLang(extLang, extUpdatedAt);
+        setUiLangState(saved);
+      },
+    });
+
+    requestExtensionUiLang();
+
+    const handleStorage = (event) => {
+      if (event.key === STORAGE_KEYS.UI_LANG && event.newValue) {
+        setUiLangState(event.newValue === 'en' ? 'en' : 'vi');
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsubscribeExt();
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
   const handleChangeUiLang = (nextLang) => {
-    const saved = setUiLang(nextLang);
+    const updatedAt = Date.now();
+    const saved = setUiLang(nextLang, updatedAt);
     setUiLangState(saved);
+    notifyExtensionUiLang(saved, updatedAt);
   };
 
   const handleSaveSettings = ({ url, lang, uiLanguage }) => {
