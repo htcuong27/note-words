@@ -105,14 +105,14 @@ export default function Flashcard({
             onFlip();
           }
         }}
-        className={`flashcard-inner min-h-[300px] w-full cursor-pointer select-none rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-600 sm:min-h-[340px] ${
+        className={`flashcard-inner grid min-h-[300px] w-full cursor-pointer select-none rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-600 sm:min-h-[340px] ${
           isFlipped ? 'is-flipped' : ''
         }`}
       >
         {/* Front Face */}
         <section
           aria-hidden={isFlipped}
-          className={`flashcard-face absolute inset-0 flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:border-blue-200 hover:shadow-md sm:p-8 ${
+          className={`flashcard-face col-start-1 row-start-1 flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:border-blue-200 hover:shadow-md sm:p-8 ${
             isFlipped ? 'pointer-events-none' : ''
           }`}
         >
@@ -180,7 +180,7 @@ export default function Flashcard({
         {/* Back Face */}
         <section
           aria-hidden={!isFlipped}
-          className={`flashcard-face flashcard-face-back absolute inset-0 flex flex-col justify-between rounded-2xl border border-blue-200 bg-gradient-to-b from-white to-blue-50/50 p-6 shadow-sm sm:p-8 ${
+          className={`flashcard-face flashcard-face-back col-start-1 row-start-1 flex min-w-0 flex-col justify-between rounded-2xl border border-blue-200 bg-gradient-to-b from-white to-blue-50/50 p-6 shadow-sm sm:p-8 ${
             !isFlipped ? 'pointer-events-none' : ''
           }`}
         >

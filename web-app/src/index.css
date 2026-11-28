@@ -194,6 +194,7 @@
 .flashcard-face {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  transform: rotateY(0deg);
 }
 
 .flashcard-face-back {
